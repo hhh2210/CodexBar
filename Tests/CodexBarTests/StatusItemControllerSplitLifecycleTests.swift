@@ -329,7 +329,7 @@ struct StatusItemControllerSplitLifecycleTests {
     }
 
     @Test
-    func `status item defaults repair removes stale hidden Control Center keys repeatedly`() throws {
+    func `status item defaults repair removes stale hidden Control Center keys during migration`() throws {
         let suite = "StatusItemControllerSplitLifecycleTests-repair-repeated-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
@@ -351,16 +351,26 @@ struct StatusItemControllerSplitLifecycleTests {
         #expect(defaults.object(forKey: "NSStatusItem VisibleCC Item-12") == nil)
         #expect(defaults.object(forKey: "NSStatusItem VisibleCC codexbar-merged") == nil)
         #expect(defaults.bool(forKey: MenuBarStatusItemDefaultsRepair.didRepairKey))
+    }
+
+    @Test
+    func `status item defaults repair repeats default item cleanup without overriding later user hides`() throws {
+        let suite = "StatusItemControllerSplitLifecycleTests-repair-repeat-default-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(true, forKey: MenuBarStatusItemDefaultsRepair.didRepairKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+        }
 
         defaults.set(false, forKey: "NSStatusItem VisibleCC Item-2")
         defaults.set(false, forKey: "NSStatusItem VisibleCC codexbar-codex")
 
         #expect(MenuBarStatusItemDefaultsRepair.repairHiddenVisibilityDefaultsIfNeeded(defaults: defaults) == [
             "NSStatusItem VisibleCC Item-2",
-            "NSStatusItem VisibleCC codexbar-codex",
         ])
         #expect(defaults.object(forKey: "NSStatusItem VisibleCC Item-2") == nil)
-        #expect(defaults.object(forKey: "NSStatusItem VisibleCC codexbar-codex") == nil)
+        #expect(defaults.object(forKey: "NSStatusItem VisibleCC codexbar-codex") != nil)
     }
 
     @Test
