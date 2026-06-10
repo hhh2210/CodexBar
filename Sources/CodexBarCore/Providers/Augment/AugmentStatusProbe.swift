@@ -15,12 +15,15 @@ public enum AugmentCookieImporter {
     /// NOTE: This list may not be exhaustive. If authentication fails with cookies present,
     /// check debug logs for cookie names and report them.
     private static let sessionCookieNames: Set<String> = [
-        "_session", // Legacy session cookie
+        "session", // Augment auth session (auth.augmentcode.com)
+        "_session", // Legacy session cookie (app.augmentcode.com)
+        "web_rpc_proxy_session", // Augment RPC proxy session
         "auth0", // Auth0 session
         "auth0.is.authenticated", // Auth0 authentication flag
         "a0.spajs.txs", // Auth0 SPA transaction state
         "__Secure-next-auth.session-token", // NextAuth secure session
         "next-auth.session-token", // NextAuth session
+        "__Secure-authjs.session-token", // AuthJS secure session
         "__Host-authjs.csrf-token", // AuthJS CSRF token
         "authjs.session-token", // AuthJS session
     ]
@@ -131,6 +134,10 @@ public struct AugmentCreditsResponse: Codable, Sendable {
     }
 
     public var creditsLimit: Double? {
+        if let available = self.usageUnitsAvailable, available > 0 {
+            return available
+        }
+
         guard let remaining = self.usageUnitsRemaining,
               let consumed = self.usageUnitsConsumedThisBillingCycle
         else {
@@ -222,6 +229,7 @@ public struct AugmentStatusSnapshot: Sendable {
 
     private static func formatResetDate(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "en_US")
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
     }
@@ -492,7 +500,7 @@ public struct AugmentStatusProbe: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AugmentStatusProbeError.networkError("Invalid response")
@@ -530,7 +538,7 @@ public struct AugmentStatusProbe: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AugmentStatusProbeError.networkError("Invalid response")

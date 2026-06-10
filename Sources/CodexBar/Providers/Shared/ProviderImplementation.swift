@@ -42,9 +42,17 @@ protocol ProviderImplementation: Sendable {
     @MainActor
     func settingsFields(context: ProviderSettingsContext) -> [ProviderSettingsFieldDescriptor]
 
+    /// Optional provider-specific settings action rows to render in the Providers pane.
+    @MainActor
+    func settingsActions(context: ProviderSettingsContext) -> [ProviderSettingsActionsDescriptor]
+
     /// Optional provider-specific settings pickers to render in the Providers pane.
     @MainActor
     func settingsPickers(context: ProviderSettingsContext) -> [ProviderSettingsPickerDescriptor]
+
+    /// Optional provider-specific organizations selection rendered in the Providers pane.
+    @MainActor
+    func settingsOrganizations(context: ProviderSettingsContext) -> ProviderSettingsOrganizationsDescriptor?
 
     /// Optional visibility gate for token account settings.
     @MainActor
@@ -130,8 +138,18 @@ extension ProviderImplementation {
     }
 
     @MainActor
+    func settingsActions(context _: ProviderSettingsContext) -> [ProviderSettingsActionsDescriptor] {
+        []
+    }
+
+    @MainActor
     func settingsPickers(context _: ProviderSettingsContext) -> [ProviderSettingsPickerDescriptor] {
         []
+    }
+
+    @MainActor
+    func settingsOrganizations(context _: ProviderSettingsContext) -> ProviderSettingsOrganizationsDescriptor? {
+        nil
     }
 
     @MainActor

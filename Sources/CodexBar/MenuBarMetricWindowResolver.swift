@@ -17,6 +17,8 @@ enum MenuBarMetricWindowResolver {
     {
         guard let snapshot else { return nil }
         switch preference {
+        case .extraUsage:
+            return Self.extraUsageWindow(snapshot: snapshot)
         case .tertiary:
             return Self.window(in: snapshot, following: Self.tertiaryOrder(for: provider))
         case .primary:
@@ -82,7 +84,10 @@ enum MenuBarMetricWindowResolver {
 
     private static func automaticWindow(provider: UsageProvider, snapshot: UsageSnapshot) -> RateWindow? {
         if provider == .antigravity {
-            return self.window(in: snapshot, following: [.primary, .secondary, .tertiary])
+            return self.mostConstrainedWindow(
+                primary: snapshot.primary,
+                secondary: snapshot.secondary,
+                tertiary: snapshot.tertiary)
         }
         if provider == .perplexity {
             return snapshot.automaticPerplexityWindow()
@@ -102,11 +107,17 @@ enum MenuBarMetricWindowResolver {
         {
             return primary.usedPercent >= secondary.usedPercent ? primary : secondary
         }
-        if provider == .cursor {
+        if provider == .cursor || provider == .minimax {
             return Self.mostConstrainedWindow(
                 primary: snapshot.primary,
                 secondary: snapshot.secondary,
                 tertiary: snapshot.tertiary)
+        }
+        if provider == .claude,
+           Self.shouldUseClaudeSpendLimit(providerCost: snapshot.providerCost, snapshot: snapshot),
+           let extraUsage = Self.extraUsageWindow(snapshot: snapshot)
+        {
+            return extraUsage
         }
         return snapshot.primary ?? snapshot.secondary
     }
@@ -140,5 +151,31 @@ enum MenuBarMetricWindowResolver {
         let windows = [primary, secondary, tertiary].compactMap(\.self)
         guard !windows.isEmpty else { return nil }
         return windows.max(by: { $0.usedPercent < $1.usedPercent })
+    }
+
+    private static func shouldUseClaudeSpendLimit(
+        providerCost: ProviderCostSnapshot?,
+        snapshot: UsageSnapshot)
+        -> Bool
+    {
+        guard providerCost?.limit ?? 0 > 0,
+              snapshot.secondary == nil,
+              snapshot.tertiary == nil
+        else { return false }
+        guard let primary = snapshot.primary else { return true }
+        return primary.usedPercent == 0
+            && primary.windowMinutes == 5 * 60
+            && primary.resetsAt == nil
+            && primary.resetDescription == nil
+    }
+
+    private static func extraUsageWindow(snapshot: UsageSnapshot?) -> RateWindow? {
+        guard let cost = snapshot?.providerCost, cost.limit > 0 else { return nil }
+        let usedPercent = max(0, min(100, (cost.used / cost.limit) * 100))
+        return RateWindow(
+            usedPercent: usedPercent,
+            windowMinutes: nil,
+            resetsAt: cost.resetsAt,
+            resetDescription: nil)
     }
 }

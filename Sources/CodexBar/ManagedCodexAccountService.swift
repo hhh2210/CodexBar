@@ -1,3 +1,4 @@
+import AppKit
 import CodexBarCore
 import Foundation
 
@@ -16,12 +17,43 @@ protocol ManagedCodexIdentityReading: Sendable {
 
 protocol ManagedCodexWorkspaceResolving: Sendable {
     func resolveWorkspaceIdentity(homePath: String, providerAccountID: String) async -> CodexOpenAIWorkspaceIdentity?
+    func availableWorkspaceIdentities(homePath: String) async -> [CodexOpenAIWorkspaceIdentity]
+}
+
+extension ManagedCodexWorkspaceResolving {
+    func availableWorkspaceIdentities(homePath _: String) async -> [CodexOpenAIWorkspaceIdentity] {
+        []
+    }
+}
+
+protocol ManagedCodexWorkspaceSelecting: Sendable {
+    @MainActor
+    func selectWorkspace(
+        email: String,
+        currentWorkspaceID: String?,
+        workspaces: [CodexOpenAIWorkspaceIdentity]) async -> CodexOpenAIWorkspaceIdentity?
 }
 
 enum ManagedCodexAccountServiceError: Error, Equatable {
-    case loginFailed
+    case loginFailed(CodexLoginRunner.Result)
     case missingEmail
+    case workspaceSelectionCancelled
     case unsafeManagedHome(String)
+}
+
+extension ManagedCodexAccountServiceError {
+    var userFacingMessage: String {
+        switch self {
+        case let .loginFailed(result):
+            CodexLoginAlertPresentation.managedLoginFailureMessage(for: result)
+        case .missingEmail:
+            L("managed_login_missing_email")
+        case .workspaceSelectionCancelled:
+            L("workspace_selection_cancelled")
+        case let .unsafeManagedHome(path):
+            String(format: L("unsafe_managed_home"), path)
+        }
+    }
 }
 
 struct ManagedCodexHomeFactory: ManagedCodexHomeProducing {
@@ -102,6 +134,65 @@ struct DefaultManagedCodexWorkspaceResolver: ManagedCodexWorkspaceResolving {
             workspaceAccountID: normalizedProviderAccountID,
             workspaceLabel: cachedLabel)
     }
+
+    func availableWorkspaceIdentities(homePath: String) async -> [CodexOpenAIWorkspaceIdentity] {
+        let env = CodexHomeScope.scopedEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            codexHome: homePath)
+        guard let credentials = try? CodexOAuthCredentialsStore.load(env: env),
+              let identities = try? await CodexOpenAIWorkspaceResolver.listWorkspaces(credentials: credentials)
+        else {
+            return []
+        }
+
+        for identity in identities {
+            try? self.workspaceCache.store(identity)
+        }
+        return identities
+    }
+}
+
+struct CodexWorkspaceAlertSelector: ManagedCodexWorkspaceSelecting {
+    @MainActor
+    func selectWorkspace(
+        email: String,
+        currentWorkspaceID: String?,
+        workspaces: [CodexOpenAIWorkspaceIdentity]) async -> CodexOpenAIWorkspaceIdentity?
+    {
+        guard workspaces.count > 1 else { return workspaces.first }
+
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 26), pullsDown: false)
+        let sortedWorkspaces = workspaces.sorted { lhs, rhs in
+            self.workspaceTitle(lhs) < self.workspaceTitle(rhs)
+        }
+        for workspace in sortedWorkspaces {
+            popup.addItem(withTitle: self.workspaceTitle(workspace))
+            popup.lastItem?.representedObject = workspace.workspaceAccountID
+        }
+        if let currentWorkspaceID,
+           let selectedIndex = sortedWorkspaces.firstIndex(where: { $0.workspaceAccountID == currentWorkspaceID })
+        {
+            popup.selectItem(at: selectedIndex)
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L("Choose Codex workspace")
+        alert.informativeText = String(format: L("multiple_workspaces_found"), email)
+        alert.alertStyle = .informational
+        alert.accessoryView = popup
+        alert.addButton(withTitle: L("Add Workspace"))
+        alert.addButton(withTitle: L("Cancel"))
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+        let selectedWorkspaceID = popup.selectedItem?.representedObject as? String
+        return sortedWorkspaces.first { $0.workspaceAccountID == selectedWorkspaceID }
+    }
+
+    private func workspaceTitle(_ workspace: CodexOpenAIWorkspaceIdentity) -> String {
+        workspace.workspaceLabel ?? workspace.workspaceAccountID
+    }
 }
 
 @MainActor
@@ -111,6 +202,7 @@ final class ManagedCodexAccountService {
     private let loginRunner: any ManagedCodexLoginRunning
     private let identityReader: any ManagedCodexIdentityReading
     private let workspaceResolver: any ManagedCodexWorkspaceResolving
+    private let workspaceSelector: any ManagedCodexWorkspaceSelecting
     private let fileManager: FileManager
 
     init(
@@ -119,6 +211,7 @@ final class ManagedCodexAccountService {
         loginRunner: any ManagedCodexLoginRunning,
         identityReader: any ManagedCodexIdentityReading,
         workspaceResolver: any ManagedCodexWorkspaceResolving = DefaultManagedCodexWorkspaceResolver(),
+        workspaceSelector: any ManagedCodexWorkspaceSelecting = CodexWorkspaceAlertSelector(),
         fileManager: FileManager = .default)
     {
         self.store = store
@@ -126,6 +219,7 @@ final class ManagedCodexAccountService {
         self.loginRunner = loginRunner
         self.identityReader = identityReader
         self.workspaceResolver = workspaceResolver
+        self.workspaceSelector = workspaceSelector
         self.fileManager = fileManager
     }
 
@@ -136,6 +230,7 @@ final class ManagedCodexAccountService {
             loginRunner: DefaultManagedCodexLoginRunner(),
             identityReader: DefaultManagedCodexIdentityReader(),
             workspaceResolver: DefaultManagedCodexWorkspaceResolver(),
+            workspaceSelector: CodexWorkspaceAlertSelector(),
             fileManager: fileManager)
     }
 
@@ -152,7 +247,7 @@ final class ManagedCodexAccountService {
 
         do {
             let result = await self.loginRunner.run(homePath: homeURL.path, timeout: timeout)
-            guard case .success = result.outcome else { throw ManagedCodexAccountServiceError.loginFailed }
+            guard case .success = result.outcome else { throw ManagedCodexAccountServiceError.loginFailed(result) }
 
             let identity = try self.identityReader.loadAccountIdentity(homePath: homeURL.path)
             guard let rawEmail = identity.email?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -160,18 +255,23 @@ final class ManagedCodexAccountService {
             else {
                 throw ManagedCodexAccountServiceError.missingEmail
             }
-            let providerAccountID: String? = switch identity.identity {
+            let authenticatedProviderAccountID: String? = switch identity.identity {
             case let .providerAccount(id):
                 ManagedCodexAccount.normalizeProviderAccountID(id)
             case .emailOnly, .unresolved:
                 nil
             }
-            let workspaceIdentity: CodexOpenAIWorkspaceIdentity? = if let providerAccountID {
-                await self.workspaceResolver.resolveWorkspaceIdentity(
+            let selectedWorkspace = try await self.selectedWorkspaceIdentity(
+                email: rawEmail,
+                homePath: homeURL.path,
+                authenticatedProviderAccountID: authenticatedProviderAccountID)
+            let providerAccountID = selectedWorkspace?.workspaceAccountID ?? authenticatedProviderAccountID
+            let workspaceIdentity: CodexOpenAIWorkspaceIdentity? = if let selectedWorkspace {
+                selectedWorkspace
+            } else {
+                await self.resolvedWorkspaceIdentity(
                     homePath: homeURL.path,
                     providerAccountID: providerAccountID)
-            } else {
-                nil
             }
 
             let now = Date().timeIntervalSince1970
@@ -191,6 +291,9 @@ final class ManagedCodexAccountService {
                 providerAccountID: persistedMetadata.providerAccountID,
                 workspaceLabel: persistedMetadata.workspaceLabel,
                 workspaceAccountID: persistedMetadata.workspaceAccountID,
+                authFingerprint: CodexAuthFingerprint.fingerprint(
+                    homePath: homeURL.path,
+                    fileManager: self.fileManager),
                 managedHomePath: homeURL.path,
                 createdAt: existing?.createdAt ?? now,
                 updatedAt: now,
@@ -225,14 +328,14 @@ final class ManagedCodexAccountService {
         guard let account = snapshot.account(id: id) else { return }
 
         let homeURL = URL(fileURLWithPath: account.managedHomePath, isDirectory: true)
-        try self.homeFactory.validateManagedHomeForDeletion(homeURL)
+        let canDeleteHome = (try? self.homeFactory.validateManagedHomeForDeletion(homeURL)) != nil
 
         let remaining = snapshot.accounts.filter { $0.id != id }
         try self.store.storeAccounts(ManagedCodexAccountSet(
             version: snapshot.version,
             accounts: remaining))
 
-        if self.fileManager.fileExists(atPath: homeURL.path) {
+        if canDeleteHome, self.fileManager.fileExists(atPath: homeURL.path) {
             try? self.fileManager.removeItem(at: homeURL)
         }
     }
@@ -243,6 +346,51 @@ final class ManagedCodexAccountService {
         if self.fileManager.fileExists(atPath: homeURL.path) {
             try self.fileManager.removeItem(at: homeURL)
         }
+    }
+
+    private func selectedWorkspaceIdentity(
+        email: String,
+        homePath: String,
+        authenticatedProviderAccountID: String?) async throws -> CodexOpenAIWorkspaceIdentity?
+    {
+        let workspaces = await self.workspaceResolver.availableWorkspaceIdentities(homePath: homePath)
+        guard workspaces.count > 1 else {
+            return workspaces.first { $0.workspaceAccountID == authenticatedProviderAccountID }
+        }
+        guard let selected = await self.workspaceSelector.selectWorkspace(
+            email: email,
+            currentWorkspaceID: authenticatedProviderAccountID,
+            workspaces: workspaces)
+        else {
+            throw ManagedCodexAccountServiceError.workspaceSelectionCancelled
+        }
+        try self.persistSelectedWorkspaceID(selected.workspaceAccountID, homePath: homePath)
+        return selected
+    }
+
+    private func resolvedWorkspaceIdentity(
+        homePath: String,
+        providerAccountID: String?) async -> CodexOpenAIWorkspaceIdentity?
+    {
+        guard let providerAccountID else { return nil }
+        return await self.workspaceResolver.resolveWorkspaceIdentity(
+            homePath: homePath,
+            providerAccountID: providerAccountID)
+    }
+
+    private func persistSelectedWorkspaceID(_ workspaceID: String, homePath: String) throws {
+        let env = CodexHomeScope.scopedEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            codexHome: homePath)
+        let credentials = try CodexOAuthCredentialsStore.load(env: env)
+        try CodexOAuthCredentialsStore.save(
+            CodexOAuthCredentials(
+                accessToken: credentials.accessToken,
+                refreshToken: credentials.refreshToken,
+                idToken: credentials.idToken,
+                accountId: workspaceID,
+                lastRefresh: credentials.lastRefresh),
+            env: env)
     }
 
     private func reconciledExistingAccount(

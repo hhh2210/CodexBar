@@ -42,9 +42,17 @@ public enum CodexActiveSourceResolver {
         liveSystemAccount: ObservedSystemCodexAccount?) -> Bool
     {
         guard let liveSystemAccount else { return false }
+        if let storedFingerprint = storedAccount.authFingerprint,
+           let liveFingerprint = liveSystemAccount.authFingerprint,
+           storedFingerprint == liveFingerprint
+        {
+            return true
+        }
         return CodexIdentityMatcher.matches(
             snapshot.runtimeIdentity(for: storedAccount),
-            snapshot.runtimeIdentity(for: liveSystemAccount))
+            lhsEmail: snapshot.runtimeEmail(for: storedAccount),
+            snapshot.runtimeIdentity(for: liveSystemAccount),
+            rhsEmail: liveSystemAccount.email)
     }
 }
 
@@ -153,9 +161,20 @@ public struct DefaultCodexAccountReconciler {
                 nil
             }
             let matchingStoredAccountForLiveSystemAccount = liveSystemAccount.flatMap { liveAccount in
-                accounts.accounts.first { account in
+                if let liveFingerprint = liveAccount.authFingerprint,
+                   let exactFingerprintMatch = accounts.accounts.first(where: {
+                       $0.authFingerprint == liveFingerprint
+                   })
+                {
+                    return exactFingerprintMatch
+                }
+                return accounts.accounts.first { account in
                     guard let runtimeAccount = runtimeAccounts[account.id] else { return false }
-                    return CodexIdentityMatcher.matches(runtimeAccount.identity, self.runtimeIdentity(for: liveAccount))
+                    return CodexIdentityMatcher.matches(
+                        runtimeAccount.identity,
+                        lhsEmail: runtimeAccount.email,
+                        self.runtimeIdentity(for: liveAccount),
+                        rhsEmail: liveAccount.email)
                 }
             }
 
@@ -192,6 +211,7 @@ public struct DefaultCodexAccountReconciler {
                 email: normalizedEmail,
                 workspaceLabel: account.workspaceLabel,
                 workspaceAccountID: account.workspaceAccountID,
+                authFingerprint: account.authFingerprint,
                 codexHomePath: account.codexHomePath,
                 observedAt: account.observedAt,
                 identity: self.runtimeIdentity(for: account))
@@ -234,6 +254,22 @@ public enum CodexIdentityMatcher {
         }
     }
 
+    public static func matches(
+        _ lhs: CodexIdentity,
+        lhsEmail: String?,
+        _ rhs: CodexIdentity,
+        rhsEmail: String?) -> Bool
+    {
+        guard self.matches(lhs, rhs) else { return false }
+        guard case .providerAccount = lhs, case .providerAccount = rhs else { return true }
+        guard let normalizedLeftEmail = CodexIdentityResolver.normalizeEmail(lhsEmail),
+              let normalizedRightEmail = CodexIdentityResolver.normalizeEmail(rhsEmail)
+        else {
+            return true
+        }
+        return normalizedLeftEmail == normalizedRightEmail
+    }
+
     public static func normalized(_ identity: CodexIdentity, fallbackEmail: String) -> CodexIdentity {
         switch identity {
         case .providerAccount:
@@ -272,6 +308,7 @@ private struct AccountIdentity: Equatable {
     let createdAt: TimeInterval
     let updatedAt: TimeInterval
     let lastAuthenticatedAt: TimeInterval?
+    let authFingerprint: String?
 
     init(_ account: ManagedCodexAccount) {
         self.id = account.id
@@ -283,5 +320,6 @@ private struct AccountIdentity: Equatable {
         self.createdAt = account.createdAt
         self.updatedAt = account.updatedAt
         self.lastAuthenticatedAt = account.lastAuthenticatedAt
+        self.authFingerprint = account.authFingerprint
     }
 }

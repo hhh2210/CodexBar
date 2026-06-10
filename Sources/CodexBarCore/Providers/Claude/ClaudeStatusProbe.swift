@@ -112,15 +112,22 @@ public struct ClaudeStatusProbe: Sendable {
                 "opusPercentLeft": "\(snap.opusPercentLeft ?? -1)",
             ])
             if !keepAlive {
-                await ClaudeCLISession.shared.reset()
+                await Self.resetTransientCLISessionAndCleanupProbeArtifacts()
             }
             return snap
         } catch {
             if !keepAlive {
-                await ClaudeCLISession.shared.reset()
+                await Self.resetTransientCLISessionAndCleanupProbeArtifacts()
             }
             throw error
         }
+    }
+
+    private static func resetTransientCLISessionAndCleanupProbeArtifacts() async {
+        await ClaudeCLISession.current.reset()
+        let removed = ClaudeProbeSessionArtifactCleaner.cleanupProbeSessionArtifacts()
+        guard !removed.isEmpty else { return }
+        Self.log.debug("Claude probe session artifacts removed", metadata: ["count": "\(removed.count)"])
     }
 
     // MARK: - Parsing helpers
@@ -158,11 +165,21 @@ public struct ClaudeStatusProbe: Sendable {
             throw ClaudeStatusProbeError.parseFailed(usageError)
         }
 
+        let latestUsagePanel = self.trimToLatestUsagePanel(clean)
+        if self.isUsageStillLoading(text: latestUsagePanel ?? clean) {
+            Self.dumpIfNeeded(
+                enabled: shouldDump,
+                reason: "usage still loading",
+                usage: clean,
+                status: statusText)
+            throw ClaudeStatusProbeError.parseFailed("Claude CLI /usage is still loading usage data.")
+        }
+
         // Claude CLI renders /usage as a TUI. Our PTY capture includes earlier screen fragments (including a status
         // line
         // with a "0%" context meter) before the usage panel is drawn. To keep parsing stable, trim to the last
         // Settings/Usage panel when present.
-        let usagePanelText = self.trimToLatestUsagePanel(clean) ?? clean
+        let usagePanelText = latestUsagePanel ?? clean
         let labelContext = LabelSearchContext(text: usagePanelText)
 
         var sessionPct = self.extractPercent(labelSubstring: "Current session", context: labelContext)
@@ -307,6 +324,7 @@ public struct ClaudeStatusProbe: Sendable {
             || normalized.contains("currentweek")
             || normalized.contains("loadingusage")
             || normalized.contains("failedtoloadusagedata")
+            || self.usageCaptureHasSubscriptionNotice(normalized)
     }
 
     private static func extractPercent(labelSubstrings: [String], context: LabelSearchContext) -> Int? {
@@ -443,6 +461,9 @@ public struct ClaudeStatusProbe: Sendable {
         {
             return "Claude CLI usage endpoint is rate limited right now. Please try again later."
         }
+        if self.isSubscriptionNoticeOnly(text: text) {
+            return "Claude CLI /usage returned a subscription notice without session quota data."
+        }
         if lower.contains("failed to load usage data") {
             return "Claude CLI could not load usage data. Open the CLI and retry `/usage`."
         }
@@ -450,6 +471,30 @@ public struct ClaudeStatusProbe: Sendable {
             return "Claude CLI could not load usage data. Open the CLI and retry `/usage`."
         }
         return nil
+    }
+
+    private static func isUsageStillLoading(text: String) -> Bool {
+        let normalized = TextParsing.stripANSICodes(text).lowercased().filter { !$0.isWhitespace }
+        guard normalized.contains("loadingusage") else { return false }
+        return !self.usageCaptureHasSessionValue(normalized) && self.allPercents(text).isEmpty
+    }
+
+    /// Returns true when the text contains only a subscription notice with no session/weekly quota data.
+    /// CLI 2.1+ can return "You are currently using your subscription to power your Claude Code usage"
+    /// which lacks the "Current session" / "Current week" labels and percentage values needed for quota display.
+    /// A PTY capture may contain both an intermediate "Loading usage data…" panel and the final subscription
+    /// notice; `loadingusage` is not treated as quota data in this check so mixed captures surface correctly.
+    private static func isSubscriptionNoticeOnly(text: String) -> Bool {
+        let normalized = text.lowercased().filter { !$0.isWhitespace }
+        guard normalized.contains("currentlyusingyoursubscription") else { return false }
+        guard normalized.contains("claudecodeusage") else { return false }
+        // Only real session/week labels and actual percentage values count as quota data.
+        // `loadingusage` is not quota data — a mixed loading+subscription PTY capture should
+        // surface the subscription error, not a still-loading stall.
+        let hasQuotaData = normalized.contains("currentsession") || normalized.contains("currentweek")
+            || normalized.contains("%used") || normalized.contains("%left") || normalized.contains("%remaining")
+            || normalized.contains("%available")
+        return !hasQuotaData
     }
 
     /// Collect remaining percentages in the order they appear; used as a backup when labels move/rename.
@@ -802,15 +847,48 @@ public struct ClaudeStatusProbe: Sendable {
         }
     }
 
+    static func preparedProbeWorkingDirectoryURL() -> URL {
+        let directory = self.probeWorkingDirectoryURL()
+        do {
+            try self.prepareProbeWorkingDirectory(at: directory)
+        } catch {
+            Self.log.warning(
+                "Claude probe local settings unavailable",
+                metadata: ["error": error.localizedDescription])
+        }
+        return directory
+    }
+
+    static func prepareProbeWorkingDirectory(at directory: URL, fileManager fm: FileManager = .default) throws {
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let claudeDirectory = directory.appendingPathComponent(".claude", isDirectory: true)
+        try fm.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
+
+        let settingsURL = claudeDirectory.appendingPathComponent("settings.local.json")
+        var settings = (try? self.readSettingsObject(from: settingsURL, fileManager: fm)) ?? [:]
+        settings["disableDeepLinkRegistration"] = "disable"
+        let data = try JSONSerialization.data(
+            withJSONObject: settings,
+            options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: settingsURL, options: .atomic)
+    }
+
+    private static func readSettingsObject(from url: URL, fileManager fm: FileManager) throws -> [String: Any] {
+        guard fm.fileExists(atPath: url.path) else {
+            return [:]
+        }
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else {
+            return [:]
+        }
+        let object = try JSONSerialization.jsonObject(with: data)
+        return object as? [String: Any] ?? [:]
+    }
+
     /// Run claude CLI inside a PTY so we can respond to interactive permission prompts.
     private static func capture(subcommand: String, binary: String, timeout: TimeInterval) async throws -> String {
         let stopOnSubstrings = subcommand == "/usage"
             ? [
-                "Current week (all models)",
-                "Current week (Opus)",
-                "Current week (Sonnet only)",
-                "Current week (Sonnet)",
-                "Current session",
                 "Failed to load usage data",
                 "failed to load usage data",
                 "Failedto loadusagedata",
@@ -819,25 +897,44 @@ public struct ClaudeStatusProbe: Sendable {
             : []
         let idleTimeout: TimeInterval? = subcommand == "/usage" ? nil : 3.0
         let sendEnterEvery: TimeInterval? = subcommand == "/usage" ? 0.8 : nil
+        let stopWhenNormalized: (@Sendable (String) -> Bool)? = subcommand == "/usage"
+            ? { @Sendable normalizedScan in
+                Self.usageCaptureHasSessionValue(normalizedScan)
+                    || Self.usageCaptureHasSubscriptionNotice(normalizedScan)
+            }
+            : nil
         do {
-            return try await ClaudeCLISession.shared.capture(
+            return try await ClaudeCLISession.current.capture(
                 subcommand: subcommand,
                 binary: binary,
                 timeout: timeout,
                 idleTimeout: idleTimeout,
                 stopOnSubstrings: stopOnSubstrings,
+                stopWhenNormalized: stopWhenNormalized,
                 settleAfterStop: subcommand == "/usage" ? 2.0 : 0.25,
                 sendEnterEvery: sendEnterEvery)
         } catch ClaudeCLISession.SessionError.processExited {
-            await ClaudeCLISession.shared.reset()
+            await ClaudeCLISession.current.reset()
             throw ClaudeStatusProbeError.timedOut
         } catch ClaudeCLISession.SessionError.timedOut {
+            await ClaudeCLISession.current.reset()
             throw ClaudeStatusProbeError.timedOut
         } catch ClaudeCLISession.SessionError.launchFailed(_) {
             throw ClaudeStatusProbeError.claudeNotInstalled
         } catch {
-            await ClaudeCLISession.shared.reset()
+            await ClaudeCLISession.current.reset()
             throw error
         }
+    }
+
+    private static func usageCaptureHasSessionValue(_ normalizedText: String) -> Bool {
+        guard let labelRange = normalizedText.range(of: "currentsession") else { return false }
+        let tail = normalizedText[labelRange.upperBound...]
+        return tail.range(of: #"[0-9]{1,3}(?:\.[0-9]+)?%"#, options: .regularExpression) != nil
+    }
+
+    private static func usageCaptureHasSubscriptionNotice(_ normalizedText: String) -> Bool {
+        normalizedText.contains("currentlyusingyoursubscription")
+            && normalizedText.contains("claudecodeusage")
     }
 }

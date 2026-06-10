@@ -1,8 +1,5 @@
 import CodexBarCore
 import Commander
-#if canImport(AppKit)
-import AppKit
-#endif
 #if canImport(Darwin)
 import Darwin
 #else
@@ -33,16 +30,30 @@ enum CodexBarCLI {
 
         do {
             let invocation = try program.resolve(argv: argv)
-            Self.bootstrapLogging(values: invocation.parsedValues)
+            Self.bootstrapLogging(path: invocation.path, values: invocation.parsedValues)
             switch invocation.path {
             case ["usage"]:
                 await self.runUsage(invocation.parsedValues)
             case ["cost"]:
                 await self.runCost(invocation.parsedValues)
+            case ["serve"]:
+                await self.runServe(invocation.parsedValues)
             case ["config", "validate"]:
                 self.runConfigValidate(invocation.parsedValues)
             case ["config", "dump"]:
                 self.runConfigDump(invocation.parsedValues)
+            case ["config", "providers"]:
+                self.runConfigProviders(invocation.parsedValues)
+            case ["config", "enable"]:
+                self.runConfigSetProviderEnabled(invocation.parsedValues, enabled: true)
+            case ["config", "disable"]:
+                self.runConfigSetProviderEnabled(invocation.parsedValues, enabled: false)
+            case ["config", "set-api-key"]:
+                self.runConfigSetAPIKey(invocation.parsedValues)
+            case ["cache", "clear"]:
+                self.runCacheClear(invocation.parsedValues)
+            case ["diagnose"]:
+                await self.runDiagnose(invocation.parsedValues)
             default:
                 Self.exit(
                     code: .failure,
@@ -60,7 +71,12 @@ enum CodexBarCLI {
     private static func commandDescriptors() -> [CommandDescriptor] {
         let usageSignature = CommandSignature.describe(UsageOptions())
         let costSignature = CommandSignature.describe(CostOptions())
+        let serveSignature = CommandSignature.describe(ServeOptions())
         let configSignature = CommandSignature.describe(ConfigOptions())
+        let configProviderToggleSignature = CommandSignature.describe(ConfigProviderToggleOptions())
+        let configSetAPIKeySignature = CommandSignature.describe(ConfigSetAPIKeyOptions())
+        let cacheSignature = CommandSignature.describe(CacheOptions())
+        let diagnoseSignature = CommandSignature.describe(DiagnoseOptions())
 
         return [
             CommandDescriptor(
@@ -73,6 +89,11 @@ enum CodexBarCLI {
                 abstract: "Print local cost usage as text or JSON",
                 discussion: nil,
                 signature: costSignature),
+            CommandDescriptor(
+                name: "serve",
+                abstract: "Serve usage and cost JSON over localhost HTTP",
+                discussion: nil,
+                signature: serveSignature),
             CommandDescriptor(
                 name: "config",
                 abstract: "Config utilities",
@@ -89,19 +110,62 @@ enum CodexBarCLI {
                         abstract: "Print normalized config JSON",
                         discussion: nil,
                         signature: configSignature),
+                    CommandDescriptor(
+                        name: "providers",
+                        abstract: "List provider enablement",
+                        discussion: nil,
+                        signature: configSignature),
+                    CommandDescriptor(
+                        name: "enable",
+                        abstract: "Enable a provider",
+                        discussion: nil,
+                        signature: configProviderToggleSignature),
+                    CommandDescriptor(
+                        name: "disable",
+                        abstract: "Disable a provider",
+                        discussion: nil,
+                        signature: configProviderToggleSignature),
+                    CommandDescriptor(
+                        name: "set-api-key",
+                        abstract: "Store a provider API key",
+                        discussion: nil,
+                        signature: configSetAPIKeySignature),
                 ],
                 defaultSubcommandName: "validate"),
+            CommandDescriptor(
+                name: "cache",
+                abstract: "Cache management",
+                discussion: nil,
+                signature: CommandSignature(),
+                subcommands: [
+                    CommandDescriptor(
+                        name: "clear",
+                        abstract: "Clear cached data (cookies, cost, or all)",
+                        discussion: nil,
+                        signature: cacheSignature),
+                ],
+                defaultSubcommandName: "clear"),
+            CommandDescriptor(
+                name: "diagnose",
+                abstract: "Run provider diagnostic and emit safe JSON export",
+                discussion: nil,
+                signature: diagnoseSignature),
         ]
     }
 
     // MARK: - Helpers
 
-    private static func bootstrapLogging(values: ParsedValues) {
+    private static func bootstrapLogging(path: [String], values: ParsedValues) {
+        CodexBarLog.bootstrapIfNeeded(self.loggingConfiguration(path: path, values: values))
+    }
+
+    static func loggingConfiguration(path: [String], values: ParsedValues) -> CodexBarLog.Configuration {
         let isJSON = values.flags.contains("jsonOutput") || values.flags.contains("jsonOnly")
         let verbose = values.flags.contains("verbose")
         let rawLevel = values.options["logLevel"]?.last
         let level = Self.resolvedLogLevel(verbose: verbose, rawLevel: rawLevel)
-        CodexBarLog.bootstrapIfNeeded(.init(destination: .stderr, level: level, json: isJSON))
+        let destination: CodexBarLog.Destination = path == ["diagnose"] ? .discard : .stderr
+        return .init(destination: destination, level: level, json: isJSON)
     }
 
     static func resolvedLogLevel(verbose: Bool, rawLevel: String?) -> CodexBarLog.Level {

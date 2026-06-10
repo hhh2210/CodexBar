@@ -8,19 +8,20 @@ struct CodexBaselineCharacterizationTests {
         runtime: ProviderRuntime,
         sourceMode: ProviderSourceMode,
         env: [String: String] = [:],
-        settings: ProviderSettingsSnapshot? = nil) -> ProviderFetchContext
+        settings: ProviderSettingsSnapshot? = nil,
+        includeCredits: Bool = false) -> ProviderFetchContext
     {
         let browserDetection = BrowserDetection(cacheTTL: 0)
         return ProviderFetchContext(
             runtime: runtime,
             sourceMode: sourceMode,
-            includeCredits: false,
+            includeCredits: includeCredits,
             webTimeout: 1,
             webDebugDumpHTML: false,
             verbose: false,
             env: env,
             settings: settings,
-            fetcher: UsageFetcher(environment: env),
+            fetcher: UsageFetcher(environment: env, initializeTimeoutSeconds: 20.0, requestTimeoutSeconds: 3.0),
             claudeFetcher: ClaudeUsageFetcher(browserDetection: browserDetection),
             browserDetection: browserDetection)
     }
@@ -41,18 +42,31 @@ struct CodexBaselineCharacterizationTests {
         runtime: ProviderRuntime,
         sourceMode: ProviderSourceMode,
         env: [String: String] = [:],
-        settings: ProviderSettingsSnapshot? = nil) async -> ProviderFetchOutcome
+        settings: ProviderSettingsSnapshot? = nil,
+        includeCredits: Bool = false) async -> ProviderFetchOutcome
     {
         let descriptor = ProviderDescriptorRegistry.descriptor(for: .codex)
-        let context = self.makeContext(runtime: runtime, sourceMode: sourceMode, env: env, settings: settings)
+        let context = self.makeContext(
+            runtime: runtime,
+            sourceMode: sourceMode,
+            env: env,
+            settings: settings,
+            includeCredits: includeCredits)
         return await descriptor.fetchPlan.fetchOutcome(context: context, provider: .codex)
     }
 
     private func makeStubCodexCLI() throws -> String {
         let script = """
-        #!/usr/bin/python3
+        #!/usr/bin/python3 -S
         import json
+        import os
         import sys
+
+        counter = os.environ.get("CODEXBAR_STUB_COUNTER")
+        if counter:
+            with open(counter, "a") as f:
+                f.write("start\\n")
+        credits_only = os.environ.get("CODEXBAR_STUB_CREDITS_ONLY") == "1"
 
         for line in sys.stdin:
             if not line.strip():
@@ -66,26 +80,28 @@ struct CodexBaselineCharacterizationTests {
             if method == "initialize":
                 payload = {"id": identifier, "result": {}}
             elif method == "account/rateLimits/read":
+                rate_limits = {
+                    "credits": {
+                        "hasCredits": True,
+                        "unlimited": False,
+                        "balance": "7"
+                    }
+                }
+                if not credits_only:
+                    rate_limits["primary"] = {
+                        "usedPercent": 12,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1766948068
+                    }
+                    rate_limits["secondary"] = {
+                        "usedPercent": 43,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1767407914
+                    }
                 payload = {
                     "id": identifier,
                     "result": {
-                        "rateLimits": {
-                            "primary": {
-                                "usedPercent": 12,
-                                "windowDurationMins": 300,
-                                "resetsAt": 1766948068
-                            },
-                            "secondary": {
-                                "usedPercent": 43,
-                                "windowDurationMins": 10080,
-                                "resetsAt": 1767407914
-                            },
-                            "credits": {
-                                "hasCredits": True,
-                                "unlimited": False,
-                                "balance": "7"
-                            }
-                        }
+                        "rateLimits": rate_limits
                     }
                 }
             elif method == "account/read":
@@ -145,9 +161,9 @@ struct CodexBaselineCharacterizationTests {
     }
 
     @Test
-    func `CLI auto pipeline order is web then CLI`() async {
+    func `CLI auto pipeline order is web then OAuth then CLI`() async {
         let strategyIDs = await self.strategyIDs(runtime: .cli, sourceMode: .auto)
-        #expect(strategyIDs == ["codex.web.dashboard", "codex.cli"])
+        #expect(strategyIDs == ["codex.web.dashboard", "codex.oauth", "codex.cli"])
     }
 
     @Test
@@ -195,7 +211,7 @@ struct CodexBaselineCharacterizationTests {
     }
 
     @Test
-    func `app auto falls back from failing OAuth to successful CLI`() async throws {
+    func `app auto does not fall back from non auth failing OAuth`() async throws {
         let stubCLIPath = try self.makeStubCodexCLI()
         let oauthHome = try self.makeUnavailableOAuthHome()
         defer { try? FileManager.default.removeItem(at: oauthHome) }
@@ -207,25 +223,89 @@ struct CodexBaselineCharacterizationTests {
 
         let outcome = await self.fetchOutcome(runtime: .app, sourceMode: .auto, env: env)
 
-        #expect(outcome.attempts.map(\.strategyID) == ["codex.oauth", "codex.cli"])
-        #expect(outcome.attempts.map(\.wasAvailable) == [true, true])
+        #expect(outcome.attempts.map(\.strategyID) == ["codex.oauth"])
+        #expect(outcome.attempts.map(\.wasAvailable) == [true])
         #expect(outcome.attempts[0].errorDescription?.isEmpty == false)
-        #expect(outcome.attempts[1].errorDescription == nil)
 
         switch outcome.result {
-        case let .success(result):
-            #expect(result.sourceLabel == "codex-cli")
-            #expect(result.usage.primary?.windowMinutes == 300)
-            #expect(result.usage.secondary?.windowMinutes == 10080)
+        case .success:
+            Issue.record("Expected non-auth OAuth failure to stop before CLI fallback")
+        case let .failure(error as CodexOAuthFetchError):
+            switch error {
+            case .networkError:
+                break
+            default:
+                Issue.record("Expected network error, got \(error)")
+            }
         case let .failure(error):
             Issue.record("Unexpected failure: \(error)")
         }
     }
 
     @Test
-    func `CLI auto records unavailable web before successful CLI`() async throws {
+    func `Codex CLI strategy fetches usage and credits with one app-server process`() async throws {
         let stubCLIPath = try self.makeStubCodexCLI()
-        let env = ["CODEX_CLI_PATH": stubCLIPath]
+        defer { try? FileManager.default.removeItem(atPath: stubCLIPath) }
+        let counterURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-stub-counter-\(UUID().uuidString)", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: counterURL) }
+
+        let env = [
+            "CODEX_CLI_PATH": stubCLIPath,
+            "CODEXBAR_STUB_COUNTER": counterURL.path,
+        ]
+
+        let outcome = await self.fetchOutcome(
+            runtime: .app,
+            sourceMode: .cli,
+            env: env,
+            includeCredits: true)
+
+        switch outcome.result {
+        case let .success(result):
+            #expect(result.sourceLabel == "codex-cli")
+            #expect(result.usage.primary?.usedPercent == 12)
+            #expect(result.credits?.remaining == 7)
+        case let .failure(error):
+            Issue.record("Unexpected failure: \(error)")
+        }
+
+        let count = (try? String(contentsOf: counterURL, encoding: .utf8))?
+            .split(whereSeparator: \.isNewline)
+            .count ?? 0
+        #expect(count == 1)
+    }
+
+    @Test
+    func `Codex CLI strategy keeps credits when rate limit windows are absent`() async throws {
+        let stubCLIPath = try self.makeStubCodexCLI()
+        defer { try? FileManager.default.removeItem(atPath: stubCLIPath) }
+
+        let outcome = await self.fetchOutcome(
+            runtime: .app,
+            sourceMode: .cli,
+            env: [
+                "CODEX_CLI_PATH": stubCLIPath,
+                "CODEXBAR_STUB_CREDITS_ONLY": "1",
+            ],
+            includeCredits: true)
+
+        switch outcome.result {
+        case let .success(result):
+            #expect(result.sourceLabel == "codex-cli")
+            #expect(result.usage.primary == nil)
+            #expect(result.usage.secondary == nil)
+            #expect(result.credits?.remaining == 7)
+        case let .failure(error):
+            Issue.record("Unexpected failure: \(error)")
+        }
+    }
+
+    @Test
+    func `CLI auto records unavailable web and OAuth before successful CLI`() async throws {
+        let stubCLIPath = try self.makeStubCodexCLI()
+        let codexHome = try self.makeEmptyCodexHome()
+        defer { try? FileManager.default.removeItem(at: codexHome) }
         let settings = ProviderSettingsSnapshot.make(
             codex: .init(
                 usageDataSource: .auto,
@@ -233,15 +313,58 @@ struct CodexBaselineCharacterizationTests {
                 manualCookieHeader: nil,
                 managedAccountStoreUnreadable: true))
 
-        let outcome = await self.fetchOutcome(runtime: .cli, sourceMode: .auto, env: env, settings: settings)
+        let outcome = await self.fetchOutcome(
+            runtime: .cli,
+            sourceMode: .auto,
+            env: [
+                "CODEX_CLI_PATH": stubCLIPath,
+                "CODEX_HOME": codexHome.path,
+            ],
+            settings: settings)
 
-        #expect(outcome.attempts.map(\.strategyID) == ["codex.web.dashboard", "codex.cli"])
-        #expect(outcome.attempts.map(\.wasAvailable) == [false, true])
+        #expect(outcome.attempts.map(\.strategyID) == ["codex.web.dashboard", "codex.oauth", "codex.cli"])
+        #expect(outcome.attempts.map(\.wasAvailable) == [false, false, true])
 
         switch outcome.result {
         case let .success(result):
             #expect(result.sourceLabel == "codex-cli")
             #expect(result.usage.accountEmail(for: .codex) == "stub@example.com")
+        case let .failure(error):
+            Issue.record("Unexpected failure: \(error)")
+        }
+    }
+
+    @Test
+    func `CLI auto tries OAuth before missing CLI fallback`() async throws {
+        let oauthHome = try self.makeUnavailableOAuthHome()
+        defer { try? FileManager.default.removeItem(at: oauthHome) }
+        let settings = ProviderSettingsSnapshot.make(
+            codex: .init(
+                usageDataSource: .auto,
+                cookieSource: .auto,
+                manualCookieHeader: nil,
+                managedAccountStoreUnreadable: true))
+
+        let outcome = await self.fetchOutcome(
+            runtime: .cli,
+            sourceMode: .auto,
+            env: [
+                "CODEX_CLI_PATH": "/missing/codex",
+                "CODEX_HOME": oauthHome.path,
+            ],
+            settings: settings)
+
+        #expect(outcome.attempts.map(\.strategyID) == ["codex.web.dashboard", "codex.oauth"])
+        #expect(outcome.attempts.map(\.wasAvailable) == [false, true])
+
+        switch outcome.result {
+        case .success:
+            Issue.record("Expected unavailable OAuth endpoint to fail before CLI fallback")
+        case let .failure(error as CodexOAuthFetchError):
+            if case .networkError = error {
+                break
+            }
+            Issue.record("Expected network error, got \(error)")
         case let .failure(error):
             Issue.record("Unexpected failure: \(error)")
         }

@@ -127,9 +127,9 @@ final class MenuCardItemHostingView<Content: View>: NSHostingView<Content>, Menu
     }
 
     func measuredHeight(width: CGFloat) -> CGFloat {
-        let controller = NSHostingController(rootView: self.rootView)
-        let measured = controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
-        return measured.height
+        self.frame = NSRect(origin: self.frame.origin, size: NSSize(width: width, height: 1))
+        self.layoutSubtreeIfNeeded()
+        return self.fittingSize.height
     }
 
     func setHighlighted(_ highlighted: Bool) {
@@ -166,5 +166,125 @@ struct MenuCardSectionContainerView<Content: View>: View {
                         .padding(.trailing, 10)
                 }
             }
+    }
+}
+
+@MainActor
+final class PersistentMenuActionItemView: NSView, MenuCardHighlighting {
+    static let rowHeight: CGFloat = 28
+
+    private let backgroundView = NSView()
+    private let imageView = NSImageView()
+    private let titleField: NSTextField
+    private let shortcutField: NSTextField
+    private let onClick: () -> Void
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: self.frame.width > 0 ? self.frame.width : NSView.noIntrinsicMetric, height: Self.rowHeight)
+    }
+
+    override var fittingSize: NSSize {
+        NSSize(width: self.frame.width, height: Self.rowHeight)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(NSSize(width: newSize.width, height: Self.rowHeight))
+    }
+
+    init(
+        title: String,
+        systemImageName: String?,
+        shortcutText: String?,
+        width: CGFloat,
+        onClick: @escaping () -> Void)
+    {
+        self.titleField = NSTextField(labelWithString: title)
+        self.shortcutField = NSTextField(labelWithString: shortcutText ?? "")
+        self.onClick = onClick
+        super.init(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.rowHeight)))
+        self.setupView(systemImageName: systemImageName)
+        self.setHighlighted(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard event.type == .leftMouseUp else { return }
+        self.onClick()
+    }
+
+    func setHighlighted(_ highlighted: Bool) {
+        let primaryColor = highlighted ? NSColor.selectedMenuItemTextColor : NSColor.controlTextColor
+        let secondaryColor = highlighted ? NSColor.selectedMenuItemTextColor : NSColor.secondaryLabelColor
+        self.backgroundView.isHidden = !highlighted
+        self.titleField.textColor = primaryColor
+        self.shortcutField.textColor = secondaryColor
+        self.imageView.contentTintColor = primaryColor
+    }
+
+    private func setupView(systemImageName: String?) {
+        self.backgroundView.wantsLayer = true
+        self.backgroundView.layer?.cornerRadius = 6
+        self.backgroundView.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
+        self.backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        self.addSubview(self.backgroundView)
+
+        if let systemImageName,
+           let image = NSImage(systemSymbolName: systemImageName, accessibilityDescription: nil)
+        {
+            image.isTemplate = true
+            image.size = NSSize(width: 16, height: 16)
+            self.imageView.image = image
+        }
+        self.imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        self.titleField.font = NSFont.menuFont(ofSize: NSFont.systemFontSize)
+        self.titleField.lineBreakMode = .byTruncatingTail
+        self.titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        self.titleField.translatesAutoresizingMaskIntoConstraints = false
+
+        self.shortcutField.font = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)
+        self.shortcutField.alignment = .right
+        self.shortcutField.lineBreakMode = .byTruncatingTail
+        self.shortcutField.setContentHuggingPriority(.required, for: .horizontal)
+        self.shortcutField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        self.shortcutField.translatesAutoresizingMaskIntoConstraints = false
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(self.imageView)
+        stack.addArrangedSubview(self.titleField)
+        stack.addArrangedSubview(spacer)
+        stack.addArrangedSubview(self.shortcutField)
+        self.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            self.backgroundView.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 6),
+            self.backgroundView.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -6),
+            self.backgroundView.topAnchor.constraint(equalTo: self.topAnchor, constant: 2),
+            self.backgroundView.bottomAnchor.constraint(equalTo: self.bottomAnchor, constant: -2),
+
+            self.imageView.widthAnchor.constraint(equalToConstant: 18),
+            self.imageView.heightAnchor.constraint(equalToConstant: 18),
+            self.shortcutField.widthAnchor.constraint(equalToConstant: 38),
+
+            stack.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -12),
+            stack.centerYAnchor.constraint(equalTo: self.centerYAnchor),
+        ])
     }
 }

@@ -11,9 +11,22 @@ struct CodexBarWidgetProviderTests {
     }
 
     @Test
+    func `provider choice supports alibaba token plan`() {
+        #expect(ProviderChoice(provider: .alibabatokenplan) == .alibabatokenplan)
+        #expect(ProviderChoice.alibabatokenplan.provider == .alibabatokenplan)
+    }
+
+    @Test
     func `provider choice supports opencode go`() {
         #expect(ProviderChoice(provider: .opencodego) == .opencodego)
         #expect(ProviderChoice.opencodego.provider == .opencodego)
+    }
+
+    @Test
+    func `supported providers fall back to codex when snapshot is empty`() {
+        let snapshot = WidgetSnapshot(entries: [], enabledProviders: [], generatedAt: Date())
+
+        #expect(CodexBarSwitcherTimelineProvider.supportedProviders(from: snapshot) == [.codex])
     }
 
     @Test
@@ -32,6 +45,24 @@ struct CodexBarWidgetProviderTests {
         let snapshot = WidgetSnapshot(entries: [entry], enabledProviders: [.alibaba], generatedAt: now)
 
         #expect(CodexBarSwitcherTimelineProvider.supportedProviders(from: snapshot) == [.alibaba])
+    }
+
+    @Test
+    func `supported providers keep alibaba token plan when it is the only enabled provider`() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entry = WidgetSnapshot.ProviderEntry(
+            provider: .alibabatokenplan,
+            updatedAt: now,
+            primary: nil,
+            secondary: nil,
+            tertiary: nil,
+            creditsRemaining: nil,
+            codeReviewRemainingPercent: nil,
+            tokenUsage: nil,
+            dailyUsage: [])
+        let snapshot = WidgetSnapshot(entries: [entry], enabledProviders: [.alibabatokenplan], generatedAt: now)
+
+        #expect(CodexBarSwitcherTimelineProvider.supportedProviders(from: snapshot) == [.alibabatokenplan])
     }
 
     @Test
@@ -96,5 +127,36 @@ struct CodexBarWidgetProviderTests {
         let rows = WidgetUsageRow.rows(for: entry)
 
         #expect(rows == [WidgetUsageRow(id: "weekly", title: "Weekly", percentLeft: 75)])
+    }
+
+    @Test
+    func `legacy widget usage rows include tertiary slot when supported`() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entry = WidgetSnapshot.ProviderEntry(
+            provider: .antigravity,
+            updatedAt: now,
+            primary: RateWindow(usedPercent: 10, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            secondary: RateWindow(usedPercent: 20, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            tertiary: RateWindow(usedPercent: 30, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            creditsRemaining: nil,
+            codeReviewRemainingPercent: nil,
+            tokenUsage: nil,
+            dailyUsage: [])
+
+        let rows = WidgetUsageRow.rows(for: entry)
+
+        #expect(rows.map(\.id) == ["primary", "secondary", "tertiary"])
+        #expect(rows.map(\.title) == ["Claude", "Gemini Pro", "Gemini Flash"])
+        #expect(rows.compactMap(\.percentLeft) == [90, 80, 70])
+    }
+
+    @Test
+    func `widget configuration intents default to codex and credits`() {
+        let providerIntent = ProviderSelectionIntent()
+        let compactIntent = CompactMetricSelectionIntent()
+
+        #expect(providerIntent.provider == .codex)
+        #expect(compactIntent.provider == .codex)
+        #expect(compactIntent.metric == .credits)
     }
 }

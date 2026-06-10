@@ -24,6 +24,7 @@ public enum CodexProviderDescriptor {
                 browserCookieOrder: ProviderBrowserCookieDefaults.codexCookieImportOrder
                     ?? ProviderBrowserCookieDefaults.defaultImportOrder,
                 dashboardURL: "https://chatgpt.com/codex/settings/usage",
+                changelogURL: "https://github.com/openai/codex/releases",
                 statusPageURL: "https://status.openai.com/"),
             branding: ProviderBranding(
                 iconStyle: .codex,
@@ -57,7 +58,7 @@ public enum CodexProviderDescriptor {
             case .api:
                 return []
             case .auto:
-                return [web, cli]
+                return [web, oauth, cli]
             }
         case .app:
             switch context.sourceMode {
@@ -108,16 +109,27 @@ struct CodexCLIUsageStrategy: ProviderFetchStrategy {
     let id: String = "codex.cli"
     let kind: ProviderFetchKind = .cli
 
-    func isAvailable(_: ProviderFetchContext) async -> Bool {
-        true
+    func isAvailable(_ context: ProviderFetchContext) async -> Bool {
+        Self.resolvedBinary(env: context.env) != nil
     }
 
     func fetch(_ context: ProviderFetchContext) async throws -> ProviderFetchResult {
-        let keepAlive = context.settings?.debugKeepCLISessionsAlive ?? false
-        let usage = try await context.fetcher.loadLatestUsage(keepCLISessionsAlive: keepAlive)
-        let credits = await context.includeCredits
-            ? (try? context.fetcher.loadLatestCredits(keepCLISessionsAlive: keepAlive))
-            : nil
+        let snapshot = try await context.fetcher.loadLatestCLIAccountSnapshot()
+        guard let usage = snapshot.usage else {
+            guard context.includeCredits, let credits = snapshot.credits else {
+                throw UsageError.noRateLimitsFound
+            }
+            // Credits refresh can succeed even when RPC omits rate-limit windows.
+            return self.makeResult(
+                usage: UsageSnapshot(
+                    primary: nil,
+                    secondary: nil,
+                    updatedAt: credits.updatedAt,
+                    identity: nil),
+                credits: credits,
+                sourceLabel: "codex-cli")
+        }
+        let credits = context.includeCredits ? snapshot.credits : nil
         return self.makeResult(
             usage: usage,
             credits: credits,
@@ -126,6 +138,24 @@ struct CodexCLIUsageStrategy: ProviderFetchStrategy {
 
     func shouldFallback(on _: Error, context _: ProviderFetchContext) -> Bool {
         false
+    }
+
+    static func resolvedBinary(
+        env: [String: String],
+        loginPATH: [String]? = LoginShellPathCache.shared.current,
+        commandV: (String, String?, TimeInterval, FileManager) -> String? = ShellCommandLocator.commandV,
+        aliasResolver: (String, String?, TimeInterval, FileManager, String) -> String? = ShellCommandLocator
+            .resolveAlias,
+        fileManager: FileManager = .default,
+        home: String = NSHomeDirectory()) -> String?
+    {
+        BinaryLocator.resolveCodexBinary(
+            env: env,
+            loginPATH: loginPATH,
+            commandV: commandV,
+            aliasResolver: aliasResolver,
+            fileManager: fileManager,
+            home: home)
     }
 }
 
@@ -159,7 +189,33 @@ struct CodexOAuthFetchStrategy: ProviderFetchStrategy {
 
     func shouldFallback(on error: Error, context: ProviderFetchContext) -> Bool {
         guard context.sourceMode == .auto else { return false }
-        return true
+
+        // Auto mode may launch the CLI as the next strategy. Keep that fallback
+        // limited to OAuth states the CLI can actually repair, otherwise
+        // transient API or decode failures can spawn `codex app-server`
+        // repeatedly instead of surfacing the original OAuth failure.
+        if let fetchError = error as? CodexOAuthFetchError {
+            switch fetchError {
+            case .unauthorized:
+                return true
+            case .invalidResponse, .serverError, .networkError:
+                return false
+            }
+        }
+        if let credentialsError = error as? CodexOAuthCredentialsError {
+            switch credentialsError {
+            case .notFound, .missingTokens:
+                return true
+            case .decodeFailed:
+                return false
+            }
+        }
+        switch error as? CodexTokenRefresher.RefreshError {
+        case .expired, .revoked, .reused:
+            return true
+        case .networkError, .invalidResponse, .none:
+            return false
+        }
     }
 
     private static func mapCredits(_ credits: CodexUsageResponse.CreditDetails?) -> CreditsSnapshot? {
@@ -174,12 +230,12 @@ struct CodexOAuthFetchStrategy: ProviderFetchStrategy {
         sourceMode: ProviderSourceMode) throws -> ProviderFetchResult
     {
         let credits = Self.mapCredits(usageResponse.credits)
-
-        if let reconciled = CodexReconciledState.fromOAuth(
+        let reconciled = CodexReconciledState.fromOAuth(
             response: usageResponse,
             credentials: credentials,
             updatedAt: updatedAt)
-        {
+
+        if let reconciled {
             return CodexOAuthFetchStrategy().makeResult(
                 usage: reconciled.toUsageSnapshot(),
                 credits: credits,
@@ -190,10 +246,9 @@ struct CodexOAuthFetchStrategy: ProviderFetchStrategy {
             throw UsageError.noRateLimitsFound
         }
 
-        if sourceMode == .auto {
-            throw UsageError.noRateLimitsFound
-        }
-
+        // Credits can still be useful when the OAuth API omits or partially
+        // fails to decode rate-limit windows. Returning the partial OAuth result
+        // prevents auto mode from escalating a usable response into CLI fallback.
         return CodexOAuthFetchStrategy().makeResult(
             usage: UsageSnapshot(
                 primary: nil,

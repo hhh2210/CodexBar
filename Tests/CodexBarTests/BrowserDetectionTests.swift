@@ -5,6 +5,7 @@ import Testing
 #if os(macOS)
 import SweetCookieKit
 
+@Suite(.serialized)
 struct BrowserDetectionTests {
     @Test
     func `safari always installed`() {
@@ -93,6 +94,83 @@ struct BrowserDetectionTests {
         let detection = BrowserDetection(homeDirectory: temp.path, cacheTTL: 0)
         let browsers: [Browser] = [.chrome, .safari]
         #expect(browsers.cookieImportCandidates(using: detection) == [.safari])
+    }
+
+    @Test
+    func `keychain interaction suppresses chromium cookie source during cooldown`() {
+        BrowserCookieAccessGate.resetForTesting()
+        defer { BrowserCookieAccessGate.resetForTesting() }
+
+        let start = Date(timeIntervalSince1970: 1000)
+        var preflightCount = 0
+
+        KeychainAccessGate.withTaskOverrideForTesting(false) {
+            ProviderInteractionContext.$current.withValue(.userInitiated) {
+                KeychainAccessPreflight.withCheckGenericPasswordOverrideForTesting { _, _ in
+                    preflightCount += 1
+                    return .interactionRequired
+                } operation: {
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.chrome, now: start) == false)
+                }
+
+                KeychainAccessPreflight.withCheckGenericPasswordOverrideForTesting { _, _ in
+                    preflightCount += 1
+                    return .allowed
+                } operation: {
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.chrome, now: start.addingTimeInterval(60)) == false)
+                    #expect(
+                        BrowserCookieAccessGate.shouldAttempt(
+                            .chrome,
+                            now: start.addingTimeInterval((60 * 60 * 6) + 1)) == true)
+                }
+            }
+        }
+
+        #expect(preflightCount == 2)
+    }
+
+    @Test
+    func `background cookie import allows authorized chromium keychain sources`() {
+        BrowserCookieAccessGate.resetForTesting()
+        defer { BrowserCookieAccessGate.resetForTesting() }
+
+        var preflightCount = 0
+
+        KeychainAccessGate.withTaskOverrideForTesting(false) {
+            KeychainAccessPreflight.withCheckGenericPasswordOverrideForTesting { _, _ in
+                preflightCount += 1
+                return .allowed
+            } operation: {
+                ProviderInteractionContext.$current.withValue(.background) {
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.chrome) == true)
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.safari) == true)
+                }
+            }
+        }
+
+        #expect(preflightCount == 1)
+    }
+
+    @Test
+    func `background cookie import suppresses chromium keychain sources requiring interaction`() {
+        BrowserCookieAccessGate.resetForTesting()
+        defer { BrowserCookieAccessGate.resetForTesting() }
+
+        var preflightCount = 0
+
+        KeychainAccessGate.withTaskOverrideForTesting(false) {
+            KeychainAccessPreflight.withCheckGenericPasswordOverrideForTesting { _, _ in
+                preflightCount += 1
+                return .interactionRequired
+            } operation: {
+                ProviderInteractionContext.$current.withValue(.background) {
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.chrome) == false)
+                    #expect(BrowserCookieAccessGate.shouldAttempt(.safari) == true)
+                }
+            }
+        }
+
+        #expect(preflightCount == 1)
     }
 
     @Test

@@ -14,9 +14,13 @@ automatic selection, but the codebase still has multiple active Claude `.auto` d
 pending. For the exact current-state parity contract, see
 [docs/refactor/claude-current-baseline.md](refactor/claude-current-baseline.md).
 
+When an Anthropic Admin API key is configured, Claude can also show organization-level spend/messages/tokens in the
+same inline dashboard pattern used by the OpenAI API provider.
+
 ## Data sources + selection order
 
 ### Default selection (debug menu disabled)
+- If an Admin API key is configured, the Admin API strategy is used for Claude API spend/usage.
 - App runtime main pipeline: OAuth API → CLI PTY → Web API.
 - CLI runtime main pipeline: Web API → CLI PTY.
 - Explicit picker modes (OAuth/Web/CLI) bypass automatic fallback.
@@ -25,6 +29,22 @@ pending. For the exact current-state parity contract, see
 
 Usage source picker:
 - Preferences → Providers → Claude → Usage source (Auto/OAuth/Web/CLI).
+
+Admin API key setup:
+- Preferences → Providers → Claude → Admin API key, stored in `~/.codexbar/config.json`.
+- CLI/env: `printf '%s' "$ANTHROPIC_ADMIN_KEY" | codexbar config set-api-key --provider claude --stdin`.
+- Token accounts can also hold `sk-ant-admin...` keys; they route to the Admin API instead of cookie/OAuth usage.
+- Environment fallback: `ANTHROPIC_ADMIN_KEY`.
+
+## Admin API
+- Key prefix: `sk-ant-admin...`.
+- Endpoints:
+  - `/v1/organizations/cost_report`
+  - `/v1/organizations/usage_report/messages`
+- Output:
+  - Today/7d/30d spend and message/token summaries.
+  - Inline 30-day dashboard chart when daily buckets are present.
+  - Identity login method: `Admin API`.
 
 ## Keychain prompt policy (Claude OAuth)
 - Preferences → Providers → Claude → Keychain prompt policy.
@@ -42,8 +62,9 @@ Usage source picker:
 
 ## OAuth API (preferred)
 - Credentials:
-  - Keychain service: `Claude Code-credentials` (primary on macOS).
+  - CodexBar OAuth cache when available.
   - File fallback: `~/.claude/.credentials.json`.
+  - Claude CLI Keychain bootstrap/repair fallback: `Claude Code-credentials`.
 - Requires `user:profile` scope (CLI tokens with only `user:inference` cannot call usage).
 - Endpoint:
   - `GET https://api.anthropic.com/api/oauth/usage`
@@ -52,10 +73,14 @@ Usage source picker:
   - `anthropic-beta: oauth-2025-04-20`
 - Mapping:
   - `five_hour` → session window.
-  - `seven_day` → weekly window.
+  - `seven_day` → weekly window; also becomes the primary fallback when `five_hour` is absent or has no utilization.
   - `seven_day_sonnet` / `seven_day_opus` → model-specific weekly window.
+  - `seven_day_routines` / `seven_day_cowork` → Daily Routines extra window.
+  - Claude Design/Omelette keys are ignored because Claude Design shares the main Claude usage limit.
   - `extra_usage` → Extra usage cost (monthly spend/limit).
-- Plan inference: `rate_limit_tier` from credentials maps to Max/Pro/Team/Enterprise.
+- Successful OAuth login enables Claude and selects OAuth as the usage source.
+- Plan inference: `subscriptionType` is preferred when present; `rate_limit_tier` falls back to
+  Max/Pro/Team/Enterprise.
 
 ## Web API (cookies)
 - Preferences → Providers → Claude → Cookie source (Automatic or Manual).
@@ -82,12 +107,17 @@ Usage source picker:
   - `GET https://claude.ai/api/account` → email + plan hints.
 - Outputs:
   - Session + weekly + model-specific percent used.
+  - Daily Routines extra window when returned by the usage API.
   - Extra usage spend/limit (if enabled).
   - Account email + inferred plan.
 
 ## CLI PTY (fallback)
 - Runs `claude` in a PTY session (`ClaudeCLISession`).
 - Default behavior: exit after each probe; Debug → "Keep CLI sessions alive" keeps it running between probes.
+- Probe working directory: `~/Library/Application Support/CodexBar/ClaudeProbe` with local Claude settings that disable
+  deep-link URL handler registration during headless probes.
+- After transient probes exit, CodexBar removes Claude Code `.jsonl` session artifacts for that dedicated
+  `ClaudeProbe` project directory so background `/usage` polling does not clutter the user's Claude project history.
 - Command flow:
   1) Start CLI with `--allowed-tools ""` (no tools).
   2) Auto-respond to first-run prompts (trust files, workspace, telemetry).

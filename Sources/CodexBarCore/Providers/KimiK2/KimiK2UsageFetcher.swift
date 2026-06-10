@@ -29,26 +29,13 @@ public struct KimiK2UsageSummary: Sendable {
     }
 
     public func toUsageSnapshot() -> UsageSnapshot {
-        let total = max(0, self.consumed + self.remaining)
-        let usedPercent: Double = if total > 0 {
-            min(100, max(0, (self.consumed / total) * 100))
-        } else {
-            0
-        }
-        let usedText = String(format: "%.0f", self.consumed)
-        let totalText = String(format: "%.0f", total)
-        let rateWindow = RateWindow(
-            usedPercent: usedPercent,
-            windowMinutes: nil,
-            resetsAt: nil,
-            resetDescription: total > 0 ? "Credits: \(usedText)/\(totalText)" : nil)
         let identity = ProviderIdentitySnapshot(
             providerID: .kimik2,
             accountEmail: nil,
             accountOrganization: nil,
-            loginMethod: nil)
+            loginMethod: "Credits: \(UsageFormatter.creditsString(from: self.remaining))")
         return UsageSnapshot(
-            primary: rateWindow,
+            primary: nil,
             secondary: nil,
             tertiary: nil,
             providerCost: nil,
@@ -136,15 +123,11 @@ public struct KimiK2UsageFetcher: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw KimiK2UsageError.networkError("Invalid response")
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
-            Self.log.error("Kimi K2 API returned \(httpResponse.statusCode): \(body)")
+        let response = try await ProviderHTTPClient.shared.response(for: request)
+        let data = response.data
+        guard response.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(response.statusCode)"
+            Self.log.error("Kimi K2 API returned \(response.statusCode): \(body)")
             throw KimiK2UsageError.apiError(body)
         }
 
@@ -152,7 +135,7 @@ public struct KimiK2UsageFetcher: Sendable {
             Self.log.debug("Kimi K2 API response: \(jsonString)")
         }
 
-        let summary = try Self.parseSummary(data: data, headers: httpResponse.allHeaderFields)
+        let summary = try Self.parseSummary(data: data, headers: response.response.allHeaderFields)
         return KimiK2UsageSnapshot(summary: summary)
     }
 

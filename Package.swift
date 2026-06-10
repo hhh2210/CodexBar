@@ -9,19 +9,39 @@ let useLocalSweetCookieKit =
 let sweetCookieKitDependency: Package.Dependency =
     useLocalSweetCookieKit && FileManager.default.fileExists(atPath: sweetCookieKitPath)
     ? .package(path: sweetCookieKitPath)
-    : .package(url: "https://github.com/steipete/SweetCookieKit", from: "0.4.0")
+    : .package(url: "https://github.com/steipete/SweetCookieKit", from: "0.4.1")
 
 let package = Package(
     name: "CodexBar",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v14),
     ],
+    products: {
+        var products: [Product] = [
+            .library(name: "CodexBarCore", targets: ["CodexBarCore"]),
+            .executable(name: "CodexBarCLI", targets: ["CodexBarCLI"]),
+        ]
+
+        #if os(macOS)
+        products.append(contentsOf: [
+            .executable(name: "CodexBar", targets: ["CodexBar"]),
+            .executable(name: "CodexBarClaudeWatchdog", targets: ["CodexBarClaudeWatchdog"]),
+            .executable(name: "CodexBarWidget", targets: ["CodexBarWidget"]),
+            .executable(name: "CodexBarClaudeWebProbe", targets: ["CodexBarClaudeWebProbe"]),
+        ])
+        #endif
+
+        return products
+    }(),
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.1"),
         .package(url: "https://github.com/steipete/Commander", from: "0.2.1"),
-        .package(url: "https://github.com/apple/swift-log", from: "1.9.1"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        .package(url: "https://github.com/apple/swift-log", from: "1.12.0"),
         .package(url: "https://github.com/apple/swift-syntax", from: "600.0.1"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.4.0"),
+        .package(url: "https://github.com/zats/Vortex", revision: "ef5392088d4aeb255c4eee83157dbdafcd31bf07"),
         sweetCookieKitDependency,
     ],
     targets: {
@@ -30,6 +50,7 @@ let package = Package(
                 name: "CodexBarCore",
                 dependencies: [
                     "CodexBarMacroSupport",
+                    .product(name: "Crypto", package: "swift-crypto"),
                     .product(name: "Logging", package: "swift-log"),
                     .product(name: "SweetCookieKit", package: "SweetCookieKit"),
                 ],
@@ -82,6 +103,7 @@ let package = Package(
                 dependencies: [
                     .product(name: "Sparkle", package: "Sparkle"),
                     .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+                    .product(name: "Vortex", package: "Vortex"),
                     "CodexBarMacroSupport",
                     "CodexBarCore",
                 ],

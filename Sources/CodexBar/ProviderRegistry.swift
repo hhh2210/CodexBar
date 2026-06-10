@@ -23,7 +23,8 @@ struct ProviderRegistry {
         metadata: [UsageProvider: ProviderMetadata],
         codexFetcher: UsageFetcher,
         claudeFetcher: any ClaudeUsageFetching,
-        browserDetection: BrowserDetection) -> [UsageProvider: ProviderSpec]
+        browserDetection: BrowserDetection,
+        environmentBase: [String: String] = ProcessInfo.processInfo.environment) -> [UsageProvider: ProviderSpec]
     {
         var specs: [UsageProvider: ProviderSpec] = [:]
         specs.reserveCapacity(UsageProvider.allCases.count)
@@ -36,12 +37,16 @@ struct ProviderRegistry {
                 isEnabled: { settings.isProviderEnabled(provider: provider, metadata: meta) },
                 descriptor: descriptor,
                 makeFetchContext: {
+                    let account = ProviderTokenAccountSelection.selectedAccount(
+                        provider: provider,
+                        settings: settings,
+                        override: nil)
                     let sourceMode = ProviderCatalog.implementation(for: provider)?
                         .sourceMode(context: ProviderSourceModeContext(provider: provider, settings: settings))
                         ?? .auto
                     let snapshot = Self.makeSettingsSnapshot(settings: settings, tokenOverride: nil)
                     let env = Self.makeEnvironment(
-                        base: ProcessInfo.processInfo.environment,
+                        base: environmentBase,
                         provider: provider,
                         settings: settings,
                         tokenOverride: nil)
@@ -51,6 +56,7 @@ struct ProviderRegistry {
                         runtime: .app,
                         sourceMode: sourceMode,
                         includeCredits: false,
+                        includeOptionalUsage: settings.showOptionalCreditsAndExtraUsage,
                         webTimeout: 60,
                         webDebugDumpHTML: false,
                         verbose: verbose,
@@ -58,7 +64,24 @@ struct ProviderRegistry {
                         settings: snapshot,
                         fetcher: fetcher,
                         claudeFetcher: claudeFetcher,
-                        browserDetection: browserDetection)
+                        browserDetection: browserDetection,
+                        selectedTokenAccountID: account?.id,
+                        tokenAccountTokenUpdater: { provider, accountID, token in
+                            await MainActor.run {
+                                settings.updateTokenAccount(
+                                    provider: provider,
+                                    accountID: accountID,
+                                    token: token)
+                            }
+                        },
+                        providerManualTokenUpdater: { provider, token in
+                            await MainActor.run {
+                                if provider == .stepfun {
+                                    settings.stepfunToken = token
+                                }
+                            }
+                        },
+                        costUsageHistoryDays: settings.costUsageHistoryDays)
                 })
             specs[provider] = spec
         }
@@ -69,13 +92,17 @@ struct ProviderRegistry {
     @MainActor
     static func makeSettingsSnapshot(
         settings: SettingsStore,
-        tokenOverride: TokenAccountOverride?) -> ProviderSettingsSnapshot
+        tokenOverride: TokenAccountOverride?,
+        codexActiveSourceOverride: CodexActiveSource? = nil) -> ProviderSettingsSnapshot
     {
         settings.ensureTokenAccountsLoaded()
         var builder = ProviderSettingsSnapshotBuilder(
             debugMenuEnabled: settings.debugMenuEnabled,
             debugKeepCLISessionsAlive: settings.debugKeepCLISessionsAlive)
-        let context = ProviderSettingsSnapshotContext(settings: settings, tokenOverride: tokenOverride)
+        let context = ProviderSettingsSnapshotContext(
+            settings: settings,
+            tokenOverride: tokenOverride,
+            codexActiveSourceOverride: codexActiveSourceOverride)
         for implementation in ProviderCatalog.all {
             if let contribution = implementation.settingsSnapshot(context: context) {
                 builder.apply(contribution)
@@ -89,34 +116,43 @@ struct ProviderRegistry {
         base: [String: String],
         provider: UsageProvider,
         settings: SettingsStore,
-        tokenOverride: TokenAccountOverride?) -> [String: String]
+        tokenOverride: TokenAccountOverride?,
+        codexActiveSourceOverride: CodexActiveSource? = nil) -> [String: String]
     {
         let account = ProviderTokenAccountSelection.selectedAccount(
             provider: provider,
             settings: settings,
             override: tokenOverride)
-        var env = ProviderConfigEnvironment.applyAPIKeyOverride(
+        var env = ProviderConfigEnvironment.applyProviderConfigOverrides(
             base: base,
             provider: provider,
             config: settings.providerConfig(for: provider))
         // If token account is selected, use its token instead of config's apiKey
-        if let account, let override = TokenAccountSupportCatalog.envOverride(
-            for: provider,
-            token: account.token)
-        {
-            for (key, value) in override {
-                env[key] = value
+        if let account {
+            TokenAccountSupportCatalog.scrubEnvironmentForSelectedAccount(
+                &env,
+                provider: provider,
+                token: account.token)
+            if let override = TokenAccountSupportCatalog.envOverride(
+                for: provider,
+                token: account.token)
+            {
+                for (key, value) in override {
+                    env[key] = value
+                }
             }
         }
-        // Managed Codex routing only scopes remote account fetches such as identity, plan,
-        // quotas, and dashboard data, and only when the active source is a managed account.
-        // Token-cost/session history is intentionally not routed through the managed home
-        // because that data is currently treated as provider-level local telemetry from this
-        // Mac's Codex sessions, not as account-owned remote state. If we later want
-        // account-scoped token history in the UI, that needs an explicit product decision and
-        // presentation change so the two concepts are not conflated.
-        if provider == .codex, let managedHomePath = settings.activeManagedCodexRemoteHomePath {
-            env = CodexHomeScope.scopedEnvironment(base: env, codexHome: managedHomePath)
+        // Codex account routing scopes remote account fetches such as identity, plan,
+        // quotas, and dashboard data. Token-cost/session history is intentionally handled
+        // separately because it is provider-level local telemetry from this Mac's Codex sessions,
+        // not account-owned remote state.
+        if provider == .codex {
+            let codexActiveSource = codexActiveSourceOverride ?? settings.codexResolvedActiveSource
+            if let managedHomePath = settings.managedCodexRemoteHomePath(forActiveSource: codexActiveSource) {
+                env = CodexHomeScope.scopedEnvironment(base: env, codexHome: managedHomePath)
+            } else if let liveHomePath = settings.liveSystemCodexHomePath(forActiveSource: codexActiveSource) {
+                env = CodexHomeScope.scopedEnvironment(base: env, codexHome: liveHomePath)
+            }
         }
         return env
     }

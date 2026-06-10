@@ -6,6 +6,39 @@ import Testing
 @MainActor
 struct CodexUserFacingErrorTests {
     @Test
+    func `missing codex CLI guidance is not collapsed to not running`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-missing-cli")
+        store.errors[.codex] = "Codex not running. Try running a Codex command first. "
+            + "(Codex CLI not found. Install with `npm i -g @openai/codex`.)"
+
+        #expect(store.userFacingError(for: .codex) == CodexStatusProbeError.codexNotInstalled.localizedDescription)
+    }
+
+    @Test
+    func `logged out codex CLI guidance is not collapsed to temporary outage`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-cli-login-required")
+        store.errors[.codex] =
+            "Codex connection failed: codex account authentication required to read rate limits"
+
+        #expect(
+            store.userFacingError(for: .codex) ==
+                "Codex CLI is not signed in. Run `codex login --device-auth`, then refresh.")
+    }
+
+    @Test
+    func `cached logged out codex CLI failure preserves cached suffix`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-cached-cli-login-required")
+        store.lastCreditsError =
+            "Last Codex credits refresh failed: Codex connection failed: "
+                + "codex account authentication required to read rate limits. Cached values from 2m ago."
+
+        #expect(
+            store.userFacingLastCreditsError ==
+                "Codex CLI is not signed in. Run `codex login --device-auth`, then refresh. "
+                + "Cached values from 2m ago.")
+    }
+
+    @Test
     func `expired codex auth is sanitized`() {
         let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-expired-auth")
         store.errors[.codex] = """
@@ -28,6 +61,17 @@ struct CodexUserFacingErrorTests {
     }
 
     @Test
+    func `decode mismatch codex error is sanitized`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-decode-mismatch")
+        store.errors[.codex] =
+            "Codex connection failed: failed to fetch codex rate limits: "
+                + "Decode error for https://chatgpt.com/backend-api/wham/usage: "
+                + "unknown variant `prolite`, expected one of `guest`, `free`, `go`, `plus`, `pro`"
+
+        #expect(store.userFacingError(for: .codex) == "Codex usage is temporarily unavailable. Try refreshing.")
+    }
+
+    @Test
     func `cached credits failure preserves cached suffix while sanitizing body`() {
         let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-cached-credits")
         store.lastCreditsError =
@@ -38,6 +82,18 @@ struct CodexUserFacingErrorTests {
         #expect(
             store.userFacingLastCreditsError ==
                 "Codex usage is temporarily unavailable. Try refreshing. Cached values from 2m ago.")
+    }
+
+    @Test
+    func `cached missing codex CLI failure preserves cached suffix`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-cached-missing-cli")
+        store.lastCreditsError =
+            "Last Codex credits refresh failed: Codex CLI not found. "
+                + "Install with `npm i -g @openai/codex`. Cached values from 2m ago."
+
+        #expect(
+            store.userFacingLastCreditsError ==
+                CodexStatusProbeError.codexNotInstalled.localizedDescription + " Cached values from 2m ago.")
     }
 
     @Test
@@ -61,6 +117,28 @@ struct CodexUserFacingErrorTests {
         #expect(
             store.userFacingLastOpenAIDashboardError ==
                 "OpenAI web refresh was interrupted. Refresh OpenAI cookies and try again.")
+    }
+
+    @Test
+    func `open A I web timeout becomes retry guidance`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-openai-web-timeout")
+        store.lastOpenAIDashboardError = "The operation couldn’t be completed. (NSURLErrorDomain error -1001.)"
+
+        #expect(
+            store.userFacingLastOpenAIDashboardError ==
+                "OpenAI web refresh timed out. Refresh OpenAI cookies and try again.")
+    }
+
+    @Test
+    func `open A I web network error becomes connection guidance`() {
+        let store = self.makeUsageStore(suite: "CodexUserFacingErrorTests-openai-web-network")
+        store.lastOpenAIDashboardError = "The operation couldn’t be completed. (NSURLErrorDomain error -1004.)"
+        let expected = [
+            "OpenAI web refresh hit a network error.",
+            "Check your connection, then refresh OpenAI cookies and try again.",
+        ].joined(separator: " ")
+
+        #expect(store.userFacingLastOpenAIDashboardError == expected)
     }
 
     @Test

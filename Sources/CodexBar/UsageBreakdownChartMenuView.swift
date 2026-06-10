@@ -31,23 +31,24 @@ struct UsageBreakdownChartMenuView: View {
         let model = Self.makeModel(from: self.breakdown)
         VStack(alignment: .leading, spacing: 10) {
             if model.points.isEmpty {
-                Text("No usage breakdown data.")
+                Text(L("No usage breakdown data."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(L("No usage breakdown data available."))
             } else {
                 Chart {
                     ForEach(model.points) { point in
                         BarMark(
-                            x: .value("Day", point.date, unit: .day),
-                            y: .value("Credits used", point.creditsUsed))
-                            .foregroundStyle(by: .value("Service", point.service))
+                            x: .value(L("Day"), point.date, unit: .day),
+                            y: .value(L("Credits used"), point.creditsUsed))
+                            .foregroundStyle(by: .value(L("Service"), point.service))
                     }
                     if let peak = model.peakPoint {
                         let capStart = max(peak.creditsUsed - Self.capHeight(maxValue: model.maxCreditsUsed), 0)
                         BarMark(
-                            x: .value("Day", peak.date, unit: .day),
-                            yStart: .value("Cap start", capStart),
-                            yEnd: .value("Cap end", peak.creditsUsed))
+                            x: .value(L("Day"), peak.date, unit: .day),
+                            yStart: .value(L("Cap start"), capStart),
+                            yEnd: .value(L("Cap end"), peak.creditsUsed))
                             .foregroundStyle(Color(nsColor: .systemYellow))
                     }
                 }
@@ -64,6 +65,14 @@ struct UsageBreakdownChartMenuView: View {
                 }
                 .chartLegend(.hidden)
                 .frame(height: 130)
+                .accessibilityLabel(L("Usage breakdown chart"))
+                .accessibilityValue(
+                    model.points.isEmpty
+                        ? L("No data")
+                        : String(
+                            format: L("%d days of usage data across %d services"),
+                            model.points.count,
+                            model.services.count))
                 .chartOverlay { proxy in
                     GeometryReader { geo in
                         ZStack(alignment: .topLeading) {
@@ -146,7 +155,7 @@ struct UsageBreakdownChartMenuView: View {
     private static let selectionBandColor = Color(nsColor: .labelColor).opacity(0.1)
 
     private static func makeModel(from breakdown: [OpenAIDashboardDailyBreakdown]) -> Model {
-        let sorted = breakdown
+        let sorted = OpenAIDashboardDailyBreakdown.removingSkillUsageServices(from: breakdown)
             .sorted { lhs, rhs in lhs.day < rhs.day }
 
         var points: [Point] = []
@@ -362,7 +371,7 @@ struct UsageBreakdownChartMenuView: View {
               let day = model.breakdownByDayKey[key],
               let date = Self.dateFromDayKey(key)
         else {
-            return ("Hover a bar for details", nil)
+            return (L("Hover a bar for details"), nil)
         }
 
         let dayLabel = date.formatted(.dateTime.month(.abbreviated).day())

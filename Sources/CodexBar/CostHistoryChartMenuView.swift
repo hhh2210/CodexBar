@@ -11,25 +11,54 @@ struct CostHistoryChartMenuView: View {
         let date: Date
         let costUSD: Double
         let totalTokens: Int?
+        let requestCount: Int?
 
-        init(date: Date, costUSD: Double, totalTokens: Int?) {
+        init(date: Date, costUSD: Double, totalTokens: Int?, requestCount: Int?) {
             self.date = date
             self.costUSD = costUSD
             self.totalTokens = totalTokens
+            self.requestCount = requestCount
             self.id = "\(Int(date.timeIntervalSince1970))-\(costUSD)"
         }
+    }
+
+    private struct DetailRow: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String?
+        let modeSubtitle: String?
+        let accentColor: Color
+    }
+
+    private struct DetailContent {
+        let primary: String
+        let rows: [DetailRow]
     }
 
     private let provider: UsageProvider
     private let daily: [DailyEntry]
     private let totalCostUSD: Double?
+    private let currencyCode: String
+    private let historyDays: Int
+    private let windowLabel: String?
     private let width: CGFloat
     @State private var selectedDateKey: String?
 
-    init(provider: UsageProvider, daily: [DailyEntry], totalCostUSD: Double?, width: CGFloat) {
+    init(
+        provider: UsageProvider,
+        daily: [DailyEntry],
+        totalCostUSD: Double?,
+        currencyCode: String = "USD",
+        historyDays: Int = 30,
+        windowLabel: String? = nil,
+        width: CGFloat)
+    {
         self.provider = provider
         self.daily = daily
         self.totalCostUSD = totalCostUSD
+        self.currencyCode = currencyCode
+        self.historyDays = max(1, min(365, historyDays))
+        self.windowLabel = windowLabel
         self.width = width
     }
 
@@ -37,23 +66,24 @@ struct CostHistoryChartMenuView: View {
         let model = Self.makeModel(provider: self.provider, daily: self.daily)
         VStack(alignment: .leading, spacing: 10) {
             if model.points.isEmpty {
-                Text("No cost history data.")
+                Text(L("No cost history data."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(L("No cost history data."))
             } else {
                 Chart {
                     ForEach(model.points) { point in
                         BarMark(
-                            x: .value("Day", point.date, unit: .day),
-                            y: .value("Cost", point.costUSD))
+                            x: .value(L("Day"), point.date, unit: .day),
+                            y: .value(L("Cost"), point.costUSD))
                             .foregroundStyle(model.barColor)
                     }
                     if let peak = Self.peakPoint(model: model) {
                         let capStart = max(peak.costUSD - Self.capHeight(maxValue: model.maxCostUSD), 0)
                         BarMark(
-                            x: .value("Day", peak.date, unit: .day),
-                            yStart: .value("Cap start", capStart),
-                            yEnd: .value("Cap end", peak.costUSD))
+                            x: .value(L("Day"), peak.date, unit: .day),
+                            yStart: .value(L("Cap start"), capStart),
+                            yEnd: .value(L("Cap end"), peak.costUSD))
                             .foregroundStyle(Color(nsColor: .systemYellow))
                     }
                 }
@@ -69,6 +99,11 @@ struct CostHistoryChartMenuView: View {
                 }
                 .chartLegend(.hidden)
                 .frame(height: 130)
+                .accessibilityLabel(L("Cost history chart"))
+                .accessibilityValue(
+                    model.points.isEmpty
+                        ? L("No data")
+                        : String(format: L("%d days of cost data"), model.points.count))
                 .chartOverlay { proxy in
                     GeometryReader { geo in
                         ZStack(alignment: .topLeading) {
@@ -88,28 +123,73 @@ struct CostHistoryChartMenuView: View {
                     }
                 }
 
-                let detail = self.detailLines(model: model)
-                VStack(alignment: .leading, spacing: 0) {
+                let detail = self.detailContent(model: model)
+                VStack(alignment: .leading, spacing: Self.detailSpacing) {
                     Text(detail.primary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .frame(height: 16, alignment: .leading)
-                    Text(detail.secondary ?? " ")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(height: 16, alignment: .leading)
-                        .opacity(detail.secondary == nil ? 0 : 1)
+                        .frame(height: Self.detailPrimaryLineHeight, alignment: .leading)
+                    ForEach(detail.rows) { row in
+                        HStack(alignment: .top, spacing: 8) {
+                            Rectangle()
+                                .fill(row.accentColor)
+                                .frame(
+                                    width: 2,
+                                    height: Self.accentHeight(for: row))
+                                .padding(.top, 1)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(row.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(height: Self.detailTitleLineHeight, alignment: .leading)
+                                if let subtitle = row.subtitle {
+                                    Text(subtitle)
+                                        .font(.caption2)
+                                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                        .frame(height: Self.detailSubtitleLineHeight, alignment: .leading)
+                                }
+                                if let modeSubtitle = row.modeSubtitle {
+                                    Text(modeSubtitle)
+                                        .font(.caption2)
+                                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                        .frame(height: Self.detailSubtitleLineHeight, alignment: .leading)
+                                }
+                            }
+                        }
+                        .frame(height: Self.detailRowHeight(for: row), alignment: .leading)
+                    }
+                    ForEach(0..<max(model.maxRenderedBreakdownRows - detail.rows.count, 0), id: \.self) { _ in
+                        Text(" ")
+                            .font(.caption)
+                            .frame(height: Self.compactDetailRowHeight, alignment: .leading)
+                            .opacity(0)
+                    }
                 }
+                .frame(
+                    height: Self.detailBlockHeight(
+                        maxBreakdownRows: model.maxRenderedBreakdownRows,
+                        maxRowsHeight: model.maxDetailRowsHeight),
+                    alignment: .topLeading)
             }
 
             if let total = self.totalCostUSD {
-                Text("Total (30d): \(UsageFormatter.usdString(total))")
+                Text(String(
+                    format: L("Est. total (%@): %@"),
+                    self.windowLabel ?? Self.windowLabel(days: self.historyDays),
+                    self.costString(total)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
             }
         }
         .padding(.horizontal, 16)
@@ -126,9 +206,37 @@ struct CostHistoryChartMenuView: View {
         let barColor: Color
         let peakKey: String?
         let maxCostUSD: Double
+        let maxRenderedBreakdownRows: Int
+        let maxDetailRowsHeight: CGFloat
     }
 
     private static let selectionBandColor = Color(nsColor: .labelColor).opacity(0.1)
+    private static let maxVisibleDetailLines = 4
+    private static let detailPrimaryLineHeight: CGFloat = 16
+    private static let detailTitleLineHeight: CGFloat = 16
+    private static let detailSubtitleLineHeight: CGFloat = 13
+    private static let compactDetailRowHeight: CGFloat = 36
+    private static let expandedDetailRowHeight: CGFloat = 44
+    private static let detailSpacing: CGFloat = 6
+
+    static func windowLabel(days: Int) -> String {
+        if days == 1 {
+            return L("Today")
+        }
+        return String(format: L("Last %d days"), days)
+    }
+
+    private static func detailRowHeight(for row: DetailRow) -> CGFloat {
+        self.detailRowHeight(hasModeSubtitle: row.modeSubtitle != nil)
+    }
+
+    private static func detailRowHeight(hasModeSubtitle: Bool) -> CGFloat {
+        hasModeSubtitle ? self.expandedDetailRowHeight : self.compactDetailRowHeight
+    }
+
+    private static func accentHeight(for row: DetailRow) -> CGFloat {
+        row.subtitle == nil && row.modeSubtitle == nil ? 14 : self.detailRowHeight(for: row)
+    }
 
     private static func capHeight(maxValue: Double) -> Double {
         maxValue * 0.05
@@ -150,14 +258,23 @@ struct CostHistoryChartMenuView: View {
 
         var peak: (key: String, costUSD: Double)?
         var maxCostUSD: Double = 0
+        var maxRenderedBreakdownRows = 0
+        var detailRowMetrics: [(count: Int, height: CGFloat)] = []
         for entry in sorted {
             guard let costUSD = entry.costUSD, costUSD >= 0 else { continue }
             guard let date = self.dateFromDayKey(entry.date) else { continue }
-            let point = Point(date: date, costUSD: costUSD, totalTokens: entry.totalTokens)
+            let point = Point(
+                date: date,
+                costUSD: costUSD,
+                totalTokens: entry.totalTokens,
+                requestCount: entry.requestCount)
             points.append(point)
             pointsByKey[entry.date] = point
             entriesByKey[entry.date] = entry
             dateKeys.append((entry.date, date))
+            let rowMetric = Self.renderedBreakdownRowsMetric(for: entry)
+            detailRowMetrics.append(rowMetric)
+            maxRenderedBreakdownRows = max(maxRenderedBreakdownRows, rowMetric.count)
             if let cur = peak {
                 if costUSD > cur.costUSD { peak = (entry.date, costUSD) }
             } else {
@@ -173,6 +290,11 @@ struct CostHistoryChartMenuView: View {
         }()
 
         let barColor = Self.barColor(for: provider)
+        let maxDetailRowsHeight = detailRowMetrics.reduce(CGFloat(0)) { currentMax, metric in
+            let fillerRows = max(maxRenderedBreakdownRows - metric.count, 0)
+            let filledHeight = metric.height + (CGFloat(fillerRows) * Self.compactDetailRowHeight)
+            return max(currentMax, filledHeight)
+        }
         return Model(
             points: points,
             pointsByDateKey: pointsByKey,
@@ -181,7 +303,9 @@ struct CostHistoryChartMenuView: View {
             axisDates: axisDates,
             barColor: barColor,
             peakKey: maxCostUSD > 0 ? peak?.key : nil,
-            maxCostUSD: maxCostUSD)
+            maxCostUSD: maxCostUSD,
+            maxRenderedBreakdownRows: maxRenderedBreakdownRows,
+            maxDetailRowsHeight: maxDetailRowsHeight)
     }
 
     private static func barColor(for provider: UsageProvider) -> Color {
@@ -209,6 +333,28 @@ struct CostHistoryChartMenuView: View {
     private static func peakPoint(model: Model) -> Point? {
         guard let key = model.peakKey else { return nil }
         return model.pointsByDateKey[key]
+    }
+
+    private static func renderedBreakdownRowsMetric(for entry: DailyEntry) -> (count: Int, height: CGFloat) {
+        guard let breakdown = entry.modelBreakdowns, !breakdown.isEmpty else { return (0, 0) }
+        let renderedRows = Array(
+            self.sortedBreakdown(breakdown)
+                .prefix(self.maxVisibleDetailLines))
+        let height = renderedRows.reduce(CGFloat(0)) { total, item in
+            total + self.detailRowHeight(hasModeSubtitle: Self.hasModeSubtitle(item))
+        }
+        return (renderedRows.count, height)
+    }
+
+    private static func hasModeSubtitle(_ item: CostUsageDailyReport.ModelBreakdown) -> Bool {
+        item.standardCostUSD != nil || item.priorityCostUSD != nil
+    }
+
+    private static func detailBlockHeight(maxBreakdownRows: Int, maxRowsHeight: CGFloat) -> CGFloat {
+        guard maxBreakdownRows > 0 else { return self.detailPrimaryLineHeight }
+        return self.detailPrimaryLineHeight +
+            maxRowsHeight +
+            (CGFloat(maxBreakdownRows) * self.detailSpacing)
     }
 
     private func selectionBandRect(model: Model, proxy: ChartProxy, geo: GeometryProxy) -> CGRect? {
@@ -286,41 +432,94 @@ struct CostHistoryChartMenuView: View {
         return best?.key
     }
 
-    private func detailLines(model: Model) -> (primary: String, secondary: String?) {
+    private func detailContent(model: Model) -> DetailContent {
         guard let key = self.selectedDateKey,
               let point = model.pointsByDateKey[key],
               let date = Self.dateFromDayKey(key)
         else {
-            return ("Hover a bar for details", nil)
+            return DetailContent(primary: L("Hover a bar for details"), rows: [])
         }
 
         let dayLabel = date.formatted(.dateTime.month(.abbreviated).day())
-        let cost = UsageFormatter.usdString(point.costUSD)
+        let cost = self.costString(point.costUSD)
+        var parts = [cost]
         if let tokens = point.totalTokens {
-            let primary = "\(dayLabel): \(cost) · \(UsageFormatter.tokenCountString(tokens)) tokens"
-            let secondary = self.topModelsText(key: key, model: model)
-            return (primary, secondary)
+            parts.append("\(UsageFormatter.tokenCountString(tokens)) tokens")
         }
-        let primary = "\(dayLabel): \(cost)"
-        let secondary = self.topModelsText(key: key, model: model)
-        return (primary, secondary)
+        if let requests = point.requestCount {
+            parts.append("\(UsageFormatter.tokenCountString(requests)) requests")
+        }
+        let primary = "\(dayLabel): \(parts.joined(separator: " · "))"
+        return DetailContent(primary: primary, rows: self.breakdownRows(key: key, model: model))
     }
 
-    private func topModelsText(key: String, model: Model) -> String? {
-        guard let entry = model.entriesByDateKey[key] else { return nil }
-        guard let breakdown = entry.modelBreakdowns, !breakdown.isEmpty else { return nil }
-        let parts = breakdown
-            .compactMap { item -> String? in
-                let name = UsageFormatter.modelDisplayName(item.modelName)
-                guard let detail = UsageFormatter.modelCostDetail(
-                    item.modelName,
-                    costUSD: item.costUSD,
-                    totalTokens: item.totalTokens)
-                else { return nil }
-                return "\(name) \(detail)"
+    private func breakdownRows(key: String, model: Model) -> [DetailRow] {
+        guard let entry = model.entriesByDateKey[key] else { return [] }
+        guard let breakdown = entry.modelBreakdowns, !breakdown.isEmpty else { return [] }
+
+        return Self.sortedBreakdown(breakdown)
+            .prefix(Self.maxVisibleDetailLines)
+            .enumerated()
+            .map { index, item in
+                DetailRow(
+                    id: "\(item.modelName)-\(index)",
+                    title: UsageFormatter.modelDisplayName(item.modelName),
+                    subtitle: self.modelBreakdownTotalSubtitle(item),
+                    modeSubtitle: self.modelBreakdownModeSubtitle(item),
+                    accentColor: model.barColor.opacity(Self.breakdownAccentOpacity(for: index)))
             }
-            .prefix(3)
+    }
+
+    private static func sortedBreakdown(
+        _ breakdown: [CostUsageDailyReport.ModelBreakdown]) -> [CostUsageDailyReport.ModelBreakdown]
+    {
+        breakdown.sorted { lhs, rhs in
+            let lCost = lhs.costUSD ?? -1
+            let rCost = rhs.costUSD ?? -1
+            if lCost != rCost { return lCost > rCost }
+
+            let lTokens = lhs.totalTokens ?? -1
+            let rTokens = rhs.totalTokens ?? -1
+            if lTokens != rTokens { return lTokens > rTokens }
+
+            return lhs.modelName > rhs.modelName
+        }
+    }
+
+    private func modelBreakdownTotalSubtitle(_ item: CostUsageDailyReport.ModelBreakdown) -> String? {
+        UsageFormatter.modelCostDetail(
+            item.modelName,
+            costUSD: item.costUSD,
+            totalTokens: item.totalTokens,
+            currencyCode: self.currencyCode)
+    }
+
+    private func modelBreakdownModeSubtitle(_ item: CostUsageDailyReport.ModelBreakdown) -> String? {
+        var parts: [String] = []
+        if let standardCost = item.standardCostUSD {
+            var standardPart = "Std \(self.costString(standardCost))"
+            if let standardTokens = item.standardTokens {
+                standardPart += " · \(UsageFormatter.tokenCountString(standardTokens))"
+            }
+            parts.append(standardPart)
+        }
+        if let priorityCost = item.priorityCostUSD {
+            var priorityPart = "Fast \(self.costString(priorityCost))"
+            if let priorityTokens = item.priorityTokens {
+                priorityPart += " · \(UsageFormatter.tokenCountString(priorityTokens))"
+            }
+            parts.append(priorityPart)
+        }
         guard !parts.isEmpty else { return nil }
-        return "Top: \(parts.joined(separator: " · "))"
+        return parts.joined(separator: " / ")
+    }
+
+    private func costString(_ value: Double) -> String {
+        UsageFormatter.currencyString(value, currencyCode: self.currencyCode)
+    }
+
+    private static func breakdownAccentOpacity(for index: Int) -> Double {
+        let opacity = 0.75 - (Double(index) * 0.12)
+        return max(0.3, opacity)
     }
 }

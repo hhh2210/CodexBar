@@ -25,6 +25,33 @@ struct ProviderSettingsContext {
     let setLastAppActiveRunAt: (String, Date?) -> Void
 
     let requestConfirmation: (ProviderSettingsConfirmation) -> Void
+    let runLoginFlow: () async -> Void
+
+    init(
+        provider: UsageProvider,
+        settings: SettingsStore,
+        store: UsageStore,
+        boolBinding: @escaping (ReferenceWritableKeyPath<SettingsStore, Bool>) -> Binding<Bool>,
+        stringBinding: @escaping (ReferenceWritableKeyPath<SettingsStore, String>) -> Binding<String>,
+        statusText: @escaping (String) -> String?,
+        setStatusText: @escaping (String, String?) -> Void,
+        lastAppActiveRunAt: @escaping (String) -> Date?,
+        setLastAppActiveRunAt: @escaping (String, Date?) -> Void,
+        requestConfirmation: @escaping (ProviderSettingsConfirmation) -> Void,
+        runLoginFlow: @escaping () async -> Void = {})
+    {
+        self.provider = provider
+        self.settings = settings
+        self.store = store
+        self.boolBinding = boolBinding
+        self.stringBinding = stringBinding
+        self.statusText = statusText
+        self.setStatusText = setStatusText
+        self.lastAppActiveRunAt = lastAppActiveRunAt
+        self.setLastAppActiveRunAt = setLastAppActiveRunAt
+        self.requestConfirmation = requestConfirmation
+        self.runLoginFlow = runLoginFlow
+    }
 }
 
 /// Shared confirmation alert descriptor.
@@ -76,12 +103,23 @@ struct ProviderSettingsFieldDescriptor: Identifiable {
     let id: String
     let title: String
     let subtitle: String
+    var footerText: String?
     let kind: Kind
     let placeholder: String?
     let binding: Binding<String>
     let actions: [ProviderSettingsActionDescriptor]
     let isVisible: (() -> Bool)?
     let onActivate: (() -> Void)?
+}
+
+/// Shared action row descriptor rendered in the Providers settings pane.
+@MainActor
+struct ProviderSettingsActionsDescriptor: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let actions: [ProviderSettingsActionDescriptor]
+    let isVisible: (() -> Bool)?
 }
 
 /// Shared token account descriptor rendered in the Providers settings pane.
@@ -96,10 +134,61 @@ struct ProviderSettingsTokenAccountsDescriptor: Identifiable {
     let accounts: () -> [ProviderTokenAccount]
     let activeIndex: () -> Int
     let setActiveIndex: (Int) -> Void
-    let addAccount: (_ label: String, _ token: String) -> Void
+    let showsOrganizationField: Bool
+    let addAccount: (_ label: String, _ token: String, _ organizationID: String?) -> Void
     let removeAccount: (_ accountID: UUID) -> Void
+    let primaryAddActionTitle: String?
+    let primaryAddAction: (() async -> Void)?
     let openConfigFile: () -> Void
     let reloadFromDisk: () -> Void
+}
+
+/// Shared organizations descriptor rendered in the Providers settings pane.
+///
+/// Used by providers that let the user opt in to additional account scopes
+/// (e.g. Kilo organizations) shown alongside the personal account.
+@MainActor
+struct ProviderSettingsOrganizationsDescriptor: Identifiable {
+    struct Entry: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String?
+        let localizesTitle: Bool
+        let localizesSubtitle: Bool
+        let isEnabled: Bool
+        let isLocked: Bool
+
+        init(
+            id: String,
+            title: String,
+            subtitle: String?,
+            localizesTitle: Bool = true,
+            localizesSubtitle: Bool = true,
+            isEnabled: Bool,
+            isLocked: Bool)
+        {
+            self.id = id
+            self.title = title
+            self.subtitle = subtitle
+            self.localizesTitle = localizesTitle
+            self.localizesSubtitle = localizesSubtitle
+            self.isEnabled = isEnabled
+            self.isLocked = isLocked
+        }
+    }
+
+    struct RefreshOutcome {
+        let success: Bool
+        let errorMessage: String?
+    }
+
+    let id: String
+    let title: String
+    let subtitle: String?
+    let entries: () -> [Entry]
+    let onToggle: (String, Bool) -> Void
+    let onRefresh: () async -> RefreshOutcome
+    let canRefresh: () -> Bool
 }
 
 /// Shared picker descriptor rendered in the Providers settings pane.

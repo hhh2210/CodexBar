@@ -23,6 +23,7 @@ struct CLICostTests {
             sessionCostUSD: 1.25,
             last30DaysTokens: 9000,
             last30DaysCostUSD: 9.99,
+            historyDays: 90,
             daily: [],
             updatedAt: Date(timeIntervalSince1970: 0))
 
@@ -30,9 +31,11 @@ struct CLICostTests {
             .replacingOccurrences(of: "\u{00A0}", with: " ")
             .replacingOccurrences(of: "$ ", with: "$")
 
-        #expect(output.contains("Claude Cost (local)"))
+        #expect(output.contains("Claude Cost (API-rate estimate)"))
         #expect(output.contains("Today: $1.25 · 1.2K tokens"))
-        #expect(output.contains("Last 30 days: $9.99 · 9K tokens"))
+        #expect(output.contains("Last 90 days: $9.99 · 9K tokens"))
+        #expect(output.contains("cache read/write tokens"))
+        #expect(output.contains("Claude Code /status"))
     }
 
     @Test
@@ -43,6 +46,7 @@ struct CLICostTests {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             sessionTokens: 100,
             sessionCostUSD: 0.5,
+            historyDays: 90,
             last30DaysTokens: 200,
             last30DaysCostUSD: 1.5,
             daily: [
@@ -81,6 +85,7 @@ struct CLICostTests {
 
         #expect(json.contains("\"provider\":\"claude\""))
         #expect(json.contains("\"source\":\"local\""))
+        #expect(json.contains("\"historyDays\":90"))
         #expect(json.contains("\"daily\""))
         #expect(json.contains("\"totals\""))
         #expect(json.contains("\"cacheReadTokens\":2"))
@@ -98,6 +103,7 @@ struct CLICostTests {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             sessionTokens: 155,
             sessionCostUSD: 0,
+            historyDays: 30,
             last30DaysTokens: 155,
             last30DaysCostUSD: 0,
             daily: [
@@ -137,5 +143,13 @@ struct CLICostTests {
         #expect(!json.contains("\"gpt-5.2\""))
         #expect(json.contains("\"cost\":0"))
         #expect(json.contains("\"totalTokens\":140"))
+    }
+
+    @Test
+    func `cost estimate hint is stable string`() {
+        let hint = UsageFormatter.costEstimateHint
+        #expect(!hint.isEmpty)
+        #expect(hint.contains("Estimated"))
+        #expect(UsageFormatter.costEstimateHint(provider: .claude).contains("cache read/write tokens"))
     }
 }

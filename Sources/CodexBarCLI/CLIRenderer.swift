@@ -15,24 +15,31 @@ enum CLIRenderer {
         context: RenderContext) -> String
     {
         let meta = ProviderDescriptorRegistry.descriptor(for: provider).metadata
+        let labels = self.rateWindowLabels(provider: provider, metadata: meta, snapshot: snapshot)
         let now = Date()
         var lines: [String] = []
         lines.append(self.headerLine(context.header, useColor: context.useColor))
         self.appendPrimaryLines(
             provider: provider,
             snapshot: snapshot,
-            metadata: meta,
+            labels: labels,
             context: context,
             now: now,
             lines: &lines)
         self.appendSecondaryLines(
             provider: provider,
             snapshot: snapshot,
-            metadata: meta,
+            labels: labels,
             context: context,
             now: now,
             lines: &lines)
-        self.appendTertiaryLines(snapshot: snapshot, metadata: meta, context: context, now: now, lines: &lines)
+        self.appendTertiaryLines(snapshot: snapshot, labels: labels, context: context, now: now, lines: &lines)
+        self.appendDeepgramLines(snapshot: snapshot, useColor: context.useColor, lines: &lines)
+        self.appendLimitsUnavailableLine(
+            provider: provider,
+            snapshot: snapshot,
+            useColor: context.useColor,
+            lines: &lines)
         self.appendCreditsLine(provider: provider, credits: credits, useColor: context.useColor, lines: &lines)
         self.appendIdentityAndNotes(
             provider: provider,
@@ -62,7 +69,7 @@ enum CLIRenderer {
     private static func appendPrimaryLines(
         provider: UsageProvider,
         snapshot: UsageSnapshot,
-        metadata: ProviderMetadata,
+        labels: RateWindowLabels,
         context: RenderContext,
         now: Date,
         lines: inout [String])
@@ -70,7 +77,7 @@ enum CLIRenderer {
         if let primary = snapshot.primary {
             self.appendRateWindowLines(
                 provider: provider,
-                title: metadata.sessionLabel,
+                title: labels.primary,
                 window: primary,
                 includePace: false,
                 context: context,
@@ -90,7 +97,7 @@ enum CLIRenderer {
     private static func appendSecondaryLines(
         provider: UsageProvider,
         snapshot: UsageSnapshot,
-        metadata: ProviderMetadata,
+        labels: RateWindowLabels,
         context: RenderContext,
         now: Date,
         lines: inout [String])
@@ -98,7 +105,7 @@ enum CLIRenderer {
         guard let weekly = snapshot.secondary else { return }
         self.appendRateWindowLines(
             provider: provider,
-            title: metadata.weeklyLabel,
+            title: labels.secondary,
             window: weekly,
             includePace: true,
             context: context,
@@ -108,16 +115,65 @@ enum CLIRenderer {
 
     private static func appendTertiaryLines(
         snapshot: UsageSnapshot,
-        metadata: ProviderMetadata,
+        labels: RateWindowLabels,
         context: RenderContext,
         now: Date,
         lines: inout [String])
     {
-        guard metadata.supportsOpus, let opus = snapshot.tertiary else { return }
-        lines.append(self.rateLine(title: metadata.opusLabel ?? "Sonnet", window: opus, useColor: context.useColor))
+        guard labels.showsTertiary, let opus = snapshot.tertiary else { return }
+        lines.append(self.rateLine(title: labels.tertiary, window: opus, useColor: context.useColor))
         if let reset = self.resetLine(for: opus, style: context.resetStyle, now: now) {
             lines.append(self.subtleLine(reset, useColor: context.useColor))
         }
+    }
+
+    private static func appendDeepgramLines(
+        snapshot: UsageSnapshot,
+        useColor: Bool,
+        lines: inout [String])
+    {
+        guard let usage = snapshot.deepgramUsage else { return }
+        for line in usage.displayLines {
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            if parts.count == 2 {
+                lines.append(self.labelValueLine(
+                    parts[0].trimmingCharacters(in: .whitespacesAndNewlines),
+                    value: parts[1].trimmingCharacters(in: .whitespacesAndNewlines),
+                    useColor: useColor))
+            } else {
+                lines.append(self.labelValueLine("Usage", value: line, useColor: useColor))
+            }
+        }
+    }
+
+    private struct RateWindowLabels {
+        let primary: String
+        let secondary: String
+        let tertiary: String
+        let showsTertiary: Bool
+    }
+
+    private static func rateWindowLabels(
+        provider: UsageProvider,
+        metadata: ProviderMetadata,
+        snapshot: UsageSnapshot) -> RateWindowLabels
+    {
+        if provider == .factory, snapshot.tertiary != nil {
+            return RateWindowLabels(
+                primary: "5-hour",
+                secondary: "Weekly",
+                tertiary: "Monthly",
+                showsTertiary: true)
+        }
+
+        let primaryLabel = provider == .grok
+            ? GrokProviderDescriptor.primaryLabel(window: snapshot.primary) ?? metadata.sessionLabel
+            : metadata.sessionLabel
+        return RateWindowLabels(
+            primary: primaryLabel,
+            secondary: metadata.weeklyLabel,
+            tertiary: metadata.opusLabel ?? "Sonnet",
+            showsTertiary: metadata.supportsOpus)
     }
 
     private static func appendCreditsLine(
@@ -131,6 +187,16 @@ enum CLIRenderer {
             "Credits",
             value: UsageFormatter.creditsString(from: credits.remaining),
             useColor: useColor))
+    }
+
+    private static func appendLimitsUnavailableLine(
+        provider: UsageProvider,
+        snapshot: UsageSnapshot,
+        useColor: Bool,
+        lines: inout [String])
+    {
+        guard snapshot.rateLimitsUnavailable(for: provider) else { return }
+        lines.append(self.labelValueLine("Limits", value: "not available", useColor: useColor))
     }
 
     private static func appendIdentityAndNotes(
@@ -153,7 +219,12 @@ enum CLIRenderer {
                 lines.append(self.labelValueLine("Activity", value: detail, useColor: context.useColor))
             }
         } else if let plan = snapshot.loginMethod(for: provider), !plan.isEmpty {
-            lines.append(self.labelValueLine("Plan", value: plan.capitalized, useColor: context.useColor))
+            let displayPlan = if provider == .codex {
+                CodexPlanFormatting.displayName(plan) ?? plan
+            } else {
+                plan.capitalized
+            }
+            lines.append(self.labelValueLine("Plan", value: displayPlan, useColor: context.useColor))
         }
 
         for note in context.notes {
@@ -194,7 +265,9 @@ enum CLIRenderer {
         now: Date,
         lines: inout [String])
     {
-        if provider == .warp || provider == .kilo {
+        if provider == .warp || provider == .kilo || provider == .mistral || provider == .deepseek ||
+            provider == .crof
+        {
             if let reset = self.resetLineForDetailBackedWindow(window: window, style: context.resetStyle, now: now) {
                 lines.append(self.subtleLine(reset, useColor: context.useColor))
             }
@@ -218,7 +291,7 @@ enum CLIRenderer {
         style: ResetTimeDisplayStyle,
         now: Date) -> String?
     {
-        // Warp/Kilo use resetDescription for non-reset detail.
+        // Some provider snapshots use resetDescription for non-reset detail.
         // Only render "Resets ..." when a concrete reset date exists.
         guard window.resetsAt != nil else { return nil }
         let resetOnlyWindow = RateWindow(
@@ -295,7 +368,10 @@ enum CLIRenderer {
         useColor: Bool,
         now: Date) -> String?
     {
-        guard provider == .codex || provider == .claude else { return nil }
+        guard provider == .codex || provider == .claude || provider == .opencode || provider == .ollama else {
+            return nil
+        }
+        if provider == .ollama, window.windowMinutes == nil { return nil }
         guard window.remainingPercent > 0 else { return nil }
         guard let pace = UsagePace.weekly(window: window, now: now, defaultWindowMinutes: 10080) else { return nil }
         guard pace.expectedUsedPercent >= Self.paceMinimumExpectedPercent else { return nil }

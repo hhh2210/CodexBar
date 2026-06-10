@@ -201,6 +201,38 @@ public struct CursorUsageSummary: Codable, Sendable {
 public struct CursorIndividualUsage: Codable, Sendable {
     public let plan: CursorPlanUsage?
     public let onDemand: CursorOnDemandUsage?
+    /// Enterprise / team-member personal cap. Reported by Cursor when the account is part of a team or
+    /// enterprise plan with an individual quota. Values follow the same cents-based units as `plan`.
+    public let overall: CursorOverallUsage?
+
+    public init(
+        plan: CursorPlanUsage? = nil,
+        onDemand: CursorOnDemandUsage? = nil,
+        overall: CursorOverallUsage? = nil)
+    {
+        self.plan = plan
+        self.onDemand = onDemand
+        self.overall = overall
+    }
+}
+
+/// Personal cap reported under `individualUsage.overall` for Enterprise/Team members.
+/// Mirrors the shape of `CursorOnDemandUsage`; values are in cents.
+public struct CursorOverallUsage: Codable, Sendable {
+    public let enabled: Bool?
+    /// Usage in cents (e.g., 7384 = $73.84)
+    public let used: Int?
+    /// Limit in cents (e.g., 10000 = $100.00). `nil` indicates the API omitted a numeric cap.
+    public let limit: Int?
+    /// Remaining in cents.
+    public let remaining: Int?
+
+    public init(enabled: Bool? = nil, used: Int? = nil, limit: Int? = nil, remaining: Int? = nil) {
+        self.enabled = enabled
+        self.used = used
+        self.limit = limit
+        self.remaining = remaining
+    }
 }
 
 public struct CursorPlanUsage: Codable, Sendable {
@@ -235,6 +267,31 @@ public struct CursorOnDemandUsage: Codable, Sendable {
 
 public struct CursorTeamUsage: Codable, Sendable {
     public let onDemand: CursorOnDemandUsage?
+    /// Shared team/enterprise pool counted across all members. Same cents-based units as the other usage blocks.
+    public let pooled: CursorPooledUsage?
+
+    public init(onDemand: CursorOnDemandUsage? = nil, pooled: CursorPooledUsage? = nil) {
+        self.onDemand = onDemand
+        self.pooled = pooled
+    }
+}
+
+/// Shared team/enterprise pool reported under `teamUsage.pooled`. Values are in cents.
+public struct CursorPooledUsage: Codable, Sendable {
+    public let enabled: Bool?
+    /// Pool usage in cents.
+    public let used: Int?
+    /// Pool limit in cents. `nil` indicates an unlimited or unreported pool.
+    public let limit: Int?
+    /// Pool remaining in cents.
+    public let remaining: Int?
+
+    public init(enabled: Bool? = nil, used: Int? = nil, limit: Int? = nil, remaining: Int? = nil) {
+        self.enabled = enabled
+        self.used = used
+        self.limit = limit
+        self.remaining = remaining
+    }
 }
 
 // MARK: - Cursor Usage API Models (Legacy Request-Based Plans)
@@ -299,6 +356,8 @@ public struct CursorStatusSnapshot: Sendable {
     public let teamOnDemandUsedUSD: Double?
     /// Team on-demand limit in USD
     public let teamOnDemandLimitUSD: Double?
+    /// Billing cycle start date
+    public let billingCycleStart: Date?
     /// Billing cycle reset date
     public let billingCycleEnd: Date?
     /// Membership type (e.g., "enterprise", "pro", "hobby")
@@ -332,6 +391,7 @@ public struct CursorStatusSnapshot: Sendable {
         onDemandLimitUSD: Double?,
         teamOnDemandUsedUSD: Double?,
         teamOnDemandLimitUSD: Double?,
+        billingCycleStart: Date? = nil,
         billingCycleEnd: Date?,
         membershipType: String?,
         accountEmail: String?,
@@ -349,6 +409,7 @@ public struct CursorStatusSnapshot: Sendable {
         self.onDemandLimitUSD = onDemandLimitUSD
         self.teamOnDemandUsedUSD = teamOnDemandUsedUSD
         self.teamOnDemandLimitUSD = teamOnDemandLimitUSD
+        self.billingCycleStart = billingCycleStart
         self.billingCycleEnd = billingCycleEnd
         self.membershipType = membershipType
         self.accountEmail = accountEmail
@@ -371,9 +432,13 @@ public struct CursorStatusSnapshot: Sendable {
             self.planPercentUsed
         }
 
+        let billingCycleWindowMinutes = Self.billingCycleWindowMinutes(
+            start: self.billingCycleStart,
+            end: self.billingCycleEnd)
+
         let primary = RateWindow(
             usedPercent: primaryUsedPercent,
-            windowMinutes: nil,
+            windowMinutes: billingCycleWindowMinutes,
             resetsAt: self.billingCycleEnd,
             resetDescription: self.billingCycleEnd.map { Self.formatResetDate($0) })
 
@@ -381,7 +446,7 @@ public struct CursorStatusSnapshot: Sendable {
         let secondary: RateWindow? = self.autoPercentUsed.map { pct in
             RateWindow(
                 usedPercent: pct,
-                windowMinutes: nil,
+                windowMinutes: billingCycleWindowMinutes,
                 resetsAt: self.billingCycleEnd,
                 resetDescription: self.billingCycleEnd.map { Self.formatResetDate($0) })
         }
@@ -390,7 +455,7 @@ public struct CursorStatusSnapshot: Sendable {
         let tertiary: RateWindow? = self.apiPercentUsed.map { pct in
             RateWindow(
                 usedPercent: pct,
-                windowMinutes: nil,
+                windowMinutes: billingCycleWindowMinutes,
                 resetsAt: self.billingCycleEnd,
                 resetDescription: self.billingCycleEnd.map { Self.formatResetDate($0) })
         }
@@ -407,7 +472,7 @@ public struct CursorStatusSnapshot: Sendable {
                 used: resolvedOnDemandUsed,
                 limit: resolvedOnDemandLimit ?? 0,
                 currencyCode: "USD",
-                period: "monthly",
+                period: "Monthly",
                 resetsAt: self.billingCycleEnd,
                 updatedAt: Date())
         } else {
@@ -443,6 +508,14 @@ public struct CursorStatusSnapshot: Sendable {
         formatter.dateFormat = "MMM d 'at' h:mma"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return "Resets " + formatter.string(from: date)
+    }
+
+    private static func billingCycleWindowMinutes(start: Date?, end: Date?) -> Int? {
+        guard let start,
+              let end
+        else { return nil }
+        let minutes = Int((end.timeIntervalSince(start) / 60).rounded())
+        return minutes > 0 ? minutes : nil
     }
 
     private static func formatMembershipType(_ type: String) -> String {
@@ -613,13 +686,13 @@ public struct CursorStatusProbe: Sendable {
     public let baseURL: URL
     public var timeout: TimeInterval = 15.0
     private let browserDetection: BrowserDetection
-    private let urlSession: URLSession
+    private let urlSession: any ProviderHTTPTransport
 
     public init(
         baseURL: URL = URL(string: "https://cursor.com")!,
         timeout: TimeInterval = 15.0,
         browserDetection: BrowserDetection,
-        urlSession: URLSession = .shared)
+        urlSession: any ProviderHTTPTransport = ProviderHTTPClient.shared)
     {
         self.baseURL = baseURL
         self.timeout = timeout
@@ -633,7 +706,10 @@ public struct CursorStatusProbe: Sendable {
     }
 
     /// Fetch Cursor usage using browser cookies with fallback to stored session.
-    public func fetch(cookieHeaderOverride: String? = nil, logger: ((String) -> Void)? = nil)
+    public func fetch(
+        cookieHeaderOverride: String? = nil,
+        allowCachedSessions: Bool = true,
+        logger: ((String) -> Void)? = nil)
         async throws -> CursorStatusSnapshot
     {
         let log: (String) -> Void = { msg in logger?("[cursor] \(msg)") }
@@ -644,7 +720,8 @@ public struct CursorStatusProbe: Sendable {
             return try await self.fetchWithCookieHeader(override)
         }
 
-        if let cached = CookieHeaderCache.load(provider: .cursor),
+        if allowCachedSessions,
+           let cached = CookieHeaderCache.load(provider: .cursor),
            !cached.cookieHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             log("Using cached cookie header from \(cached.sourceLabel)")
@@ -701,24 +778,26 @@ public struct CursorStatusProbe: Sendable {
         }
 
         // Fall back to stored session cookies (from "Add Account" login flow)
-        let storedCookies = await CursorSessionStore.shared.getCookies()
-        if !storedCookies.isEmpty {
-            log("Using stored session cookies")
-            let cookieHeader = storedCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-            do {
-                return try await self.fetchWithCookieHeader(cookieHeader)
-            } catch let error as CursorStatusProbeError {
-                if case .notLoggedIn = error {
-                    // Clear only when auth is invalid; keep for transient failures.
-                    await CursorSessionStore.shared.clearCookies()
-                    log("Stored session invalid, cleared")
-                } else {
+        if allowCachedSessions {
+            let storedCookies = await CursorSessionStore.shared.getCookies()
+            if !storedCookies.isEmpty {
+                log("Using stored session cookies")
+                let cookieHeader = storedCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+                do {
+                    return try await self.fetchWithCookieHeader(cookieHeader)
+                } catch let error as CursorStatusProbeError {
+                    if case .notLoggedIn = error {
+                        // Clear only when auth is invalid; keep for transient failures.
+                        await CursorSessionStore.shared.clearCookies()
+                        log("Stored session invalid, cleared")
+                    } else {
+                        log("Stored session failed: \(error.localizedDescription)")
+                        firstRecoverableError = firstRecoverableError ?? error
+                    }
+                } catch {
                     log("Stored session failed: \(error.localizedDescription)")
-                    firstRecoverableError = firstRecoverableError ?? error
+                    firstRecoverableError = firstRecoverableError ?? .networkError(error.localizedDescription)
                 }
-            } catch {
-                log("Stored session failed: \(error.localizedDescription)")
-                firstRecoverableError = firstRecoverableError ?? .networkError(error.localizedDescription)
             }
         }
 
@@ -955,19 +1034,19 @@ public struct CursorStatusProbe: Sendable {
         rawJSON: String?,
         requestUsage: CursorUsageResponse? = nil) -> CursorStatusSnapshot
     {
-        // Parse billing cycle end date
-        let billingCycleEnd: Date? = summary.billingCycleEnd.flatMap { dateString in
+        func parseBillingCycleDate(_ dateString: String?) -> Date? {
+            guard let dateString else { return nil }
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             return formatter.date(from: dateString) ?? ISO8601DateFormatter().date(from: dateString)
         }
+        let billingCycleStart = parseBillingCycleDate(summary.billingCycleStart)
+        let billingCycleEnd = parseBillingCycleDate(summary.billingCycleEnd)
 
         // Convert cents to USD (plan percent derives from raw values to avoid percent unit mismatches).
         // Use plan.limit directly - breakdown.total represents total *used* credits, not the limit.
         let planUsedRaw = Double(summary.individualUsage?.plan?.used ?? 0)
         let planLimitRaw = Double(summary.individualUsage?.plan?.limit ?? 0)
-        let planUsed = planUsedRaw / 100.0
-        let planLimit = planLimitRaw / 100.0
         func normPct(_ value: Double?) -> Double? {
             guard let v = value else { return nil }
             if v < 0 { return 0 }
@@ -984,9 +1063,23 @@ public struct CursorStatusProbe: Sendable {
         let autoPercent = normPct(summary.individualUsage?.plan?.autoPercentUsed)
         let apiPercent = normPct(summary.individualUsage?.plan?.apiPercentUsed)
 
-        // Headline "Total" should prefer Cursor's provided totalPercentUsed when available. plan.limit is often
-        // the subscription price in cents, so used/limit can diverge from the dashboard usage bars.
-        // If totalPercentUsed is absent, fall back to averaging the Auto/API lane percents.
+        // Enterprise / team-member personal cap (cents). Reported under `individualUsage.overall` for accounts
+        // that don't get a `plan` block. Falls through to existing logic when absent so non-enterprise paths
+        // are untouched.
+        let overallUsedRaw = (summary.individualUsage?.overall?.used).map(Double.init)
+        let overallLimitRaw = (summary.individualUsage?.overall?.limit).map(Double.init)
+
+        // Shared team/enterprise pool (cents). Last-resort fallback when no individual data is available.
+        let pooledUsedRaw = (summary.teamUsage?.pooled?.used).map(Double.init)
+        let pooledLimitRaw = (summary.teamUsage?.pooled?.limit).map(Double.init)
+
+        // Headline "Total" precedence:
+        //   1. `individualUsage.plan.totalPercentUsed` (existing behavior for Pro/Hobby/etc.)
+        //   2. averaged `auto` + `api` lane percents (existing behavior)
+        //   3. either lane alone (existing behavior)
+        //   4. `individualUsage.plan` ratio (existing behavior)
+        //   5. NEW: `individualUsage.overall` ratio (Enterprise/Team personal cap)
+        //   6. NEW: `teamUsage.pooled` ratio (last resort when no individual data is reported)
         let planPercentUsed: Double = if let totalPercentUsed = summary.individualUsage?.plan?.totalPercentUsed {
             normalizeTotalPercent(totalPercentUsed)
         } else if let autoUsed = autoPercent, let apiUsed = apiPercent {
@@ -997,8 +1090,31 @@ public struct CursorStatusProbe: Sendable {
             max(0, min(100, autoUsed))
         } else if planLimitRaw > 0 {
             (planUsedRaw / planLimitRaw) * 100
+        } else if let used = overallUsedRaw, let limit = overallLimitRaw, limit > 0 {
+            normalizeTotalPercent((used / limit) * 100)
+        } else if let used = pooledUsedRaw, let limit = pooledLimitRaw, limit > 0 {
+            normalizeTotalPercent((used / limit) * 100)
         } else {
             0
+        }
+
+        // USD figures: prefer the source the headline ultimately came from. When `plan` is missing but
+        // `overall` or `pooled` carry the cents, surface those so the on-demand display and downstream
+        // consumers see real dollar amounts instead of zeros.
+        let planUsed: Double
+        let planLimit: Double
+        if planLimitRaw > 0 || planUsedRaw > 0 {
+            planUsed = planUsedRaw / 100.0
+            planLimit = planLimitRaw / 100.0
+        } else if let usedCents = overallUsedRaw, let limitCents = overallLimitRaw {
+            planUsed = usedCents / 100.0
+            planLimit = limitCents / 100.0
+        } else if let usedCents = pooledUsedRaw, let limitCents = pooledLimitRaw {
+            planUsed = usedCents / 100.0
+            planLimit = limitCents / 100.0
+        } else {
+            planUsed = 0
+            planLimit = 0
         }
 
         let onDemandUsed = Double(summary.individualUsage?.onDemand?.used ?? 0) / 100.0
@@ -1021,6 +1137,7 @@ public struct CursorStatusProbe: Sendable {
             onDemandLimitUSD: onDemandLimit,
             teamOnDemandUsedUSD: teamOnDemandUsed,
             teamOnDemandLimitUSD: teamOnDemandLimit,
+            billingCycleStart: billingCycleStart,
             billingCycleEnd: billingCycleEnd,
             membershipType: summary.membershipType,
             accountEmail: userInfo?.email,
@@ -1062,7 +1179,7 @@ public struct CursorStatusProbe: Sendable {
         baseURL: URL = URL(string: "https://cursor.com")!,
         timeout: TimeInterval = 15.0,
         browserDetection: BrowserDetection,
-        urlSession: URLSession = .shared)
+        urlSession: any ProviderHTTPTransport = ProviderHTTPClient.shared)
     {
         _ = baseURL
         _ = timeout
@@ -1077,6 +1194,7 @@ public struct CursorStatusProbe: Sendable {
 
     public func fetch(
         cookieHeaderOverride _: String? = nil,
+        allowCachedSessions _: Bool = true,
         logger: ((String) -> Void)? = nil) async throws -> CursorStatusSnapshot
     {
         try await self.fetch(logger: logger)

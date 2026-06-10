@@ -58,4 +58,56 @@ struct ConfigValidationTests {
         let issues = CodexBarConfigValidator.validate(config)
         #expect(!issues.contains(where: { $0.provider == .kilo && $0.field == "extrasEnabled" }))
     }
+
+    @Test
+    func `allows deepgram project workspace ID`() {
+        var config = CodexBarConfig.makeDefault()
+        config.setProviderConfig(ProviderConfig(id: .deepgram, workspaceID: "project-123"))
+        let issues = CodexBarConfigValidator.validate(config)
+        #expect(!issues.contains(where: { $0.provider == .deepgram && $0.code == "workspace_unused" }))
+    }
+
+    @Test
+    func `allows Azure OpenAI endpoint and deployment fields`() {
+        var config = CodexBarConfig.makeDefault()
+        config.setProviderConfig(ProviderConfig(
+            id: .azureopenai,
+            workspaceID: "chat-prod",
+            enterpriseHost: "https://example-resource.openai.azure.com"))
+        let issues = CodexBarConfigValidator.validate(config)
+
+        #expect(!issues.contains(where: { $0.provider == .azureopenai && $0.code == "workspace_unused" }))
+        #expect(!issues.contains(where: { $0.provider == .azureopenai && $0.code == "enterprise_host_unused" }))
+    }
+
+    @Test
+    func `allows OpenAI API project workspace ID`() {
+        var config = CodexBarConfig.makeDefault()
+        config.setProviderConfig(ProviderConfig(id: .openai, workspaceID: "proj_abc"))
+        let issues = CodexBarConfigValidator.validate(config)
+
+        #expect(!issues.contains(where: { $0.provider == .openai && $0.code == "workspace_unused" }))
+    }
+
+    @Test
+    func `warns on unsupported workspace ID`() {
+        var config = CodexBarConfig.makeDefault()
+        config.setProviderConfig(ProviderConfig(id: .gemini, workspaceID: "workspace-123"))
+        let issues = CodexBarConfigValidator.validate(config)
+        #expect(issues.contains(where: { $0.provider == .gemini && $0.code == "workspace_unused" }))
+        #expect(issues.contains(where: { issue in
+            issue.provider == .gemini &&
+                issue.code == "workspace_unused" &&
+                issue.message.contains("openai")
+        }))
+    }
+
+    @Test
+    func `config store default url honors environment override`() {
+        let url = CodexBarConfigStore.defaultURL(environment: [
+            CodexBarConfigStore.pathEnvironmentKey: "~/tmp/codexbar-test-config.json",
+        ])
+
+        #expect(url.path.hasSuffix("/tmp/codexbar-test-config.json"))
+    }
 }

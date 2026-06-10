@@ -59,9 +59,15 @@ public final class AugmentSessionKeepalive {
         }
 
         self.log("🚀 Starting Augment session keepalive")
-        self.log("   - Check interval: \(Int(self.checkInterval))s (every 5 minutes)")
-        self.log("   - Refresh buffer: \(Int(self.refreshBufferSeconds))s (5 minutes before expiry)")
-        self.log("   - Min refresh interval: \(Int(self.minRefreshInterval))s (2 minutes)")
+        self.log(
+            "   - Check interval: \(Int(self.checkInterval))s "
+                + "(\(Self.durationDescription(seconds: self.checkInterval)))")
+        self.log(
+            "   - Refresh buffer: \(Int(self.refreshBufferSeconds))s "
+                + "(\(Self.durationDescription(seconds: self.refreshBufferSeconds)) before expiry)")
+        self.log(
+            "   - Min refresh interval: \(Int(self.minRefreshInterval))s "
+                + "(\(Self.durationDescription(seconds: self.minRefreshInterval)))")
 
         self.timerTask = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
@@ -206,6 +212,12 @@ public final class AugmentSessionKeepalive {
                 try await Task.sleep(for: .seconds(1)) // Brief delay for browser to update cookies
                 let newSession = try AugmentCookieImporter.importSession(logger: self.logger)
 
+                await AugmentSessionStore.shared.setCookies(newSession.cookies)
+                CookieHeaderCache.store(
+                    provider: .augment,
+                    cookieHeader: newSession.cookieHeader,
+                    sourceLabel: newSession.sourceLabel)
+
                 self.log(
                     "✅ Session refresh successful - imported \(newSession.cookies.count) cookies " +
                         "from \(newSession.sourceLabel)")
@@ -214,6 +226,11 @@ public final class AugmentSessionKeepalive {
                 // Reset failure tracking on success
                 self.consecutiveFailures = 0
                 self.hasGivenUp = false
+
+                if let callback = self.onSessionRecovered {
+                    self.log("🔄 Triggering usage refresh after session refresh")
+                    await callback()
+                }
             } else {
                 self.log("⚠️ Session refresh returned no new cookies")
                 self.consecutiveFailures += 1
@@ -371,7 +388,7 @@ public final class AugmentSessionKeepalive {
             request.setValue("https://app.augmentcode.com", forHTTPHeaderField: "Referer")
 
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     self.log("   ✗ Invalid response type")
@@ -434,6 +451,15 @@ public final class AugmentSessionKeepalive {
     }
 
     private static let log = CodexBarLog.logger(LogCategories.augmentKeepalive)
+
+    private static func durationDescription(seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        if totalSeconds >= 60, totalSeconds % 60 == 0 {
+            let minutes = totalSeconds / 60
+            return "\(minutes) minute\(minutes == 1 ? "" : "s")"
+        }
+        return "\(totalSeconds) second\(totalSeconds == 1 ? "" : "s")"
+    }
 
     private func log(_ message: String) {
         let timestamp = Date().formatted(date: .omitted, time: .standard)

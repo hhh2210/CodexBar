@@ -54,6 +54,7 @@ public enum ClaudeWebAPIFetcher {
         case unauthorized
         case serverError(statusCode: Int)
         case noOrganization
+        case organizationNotFound(String)
 
         public var errorDescription: String? {
             switch self {
@@ -73,6 +74,8 @@ public enum ClaudeWebAPIFetcher {
                 "Claude API error: HTTP \(code)"
             case .noOrganization:
                 "No Claude organization found for this account."
+            case let .organizationNotFound(id):
+                "Claude organization '\(id)' was not found for this session."
             }
         }
     }
@@ -84,6 +87,7 @@ public enum ClaudeWebAPIFetcher {
         public let weeklyPercentUsed: Double?
         public let weeklyResetsAt: Date?
         public let opusPercentUsed: Double?
+        public let extraRateWindows: [NamedRateWindow]
         public let extraUsageCost: ProviderCostSnapshot?
         public let accountOrganization: String?
         public let accountEmail: String?
@@ -95,6 +99,7 @@ public enum ClaudeWebAPIFetcher {
             weeklyPercentUsed: Double?,
             weeklyResetsAt: Date?,
             opusPercentUsed: Double?,
+            extraRateWindows: [NamedRateWindow],
             extraUsageCost: ProviderCostSnapshot?,
             accountOrganization: String?,
             accountEmail: String?,
@@ -105,6 +110,7 @@ public enum ClaudeWebAPIFetcher {
             self.weeklyPercentUsed = weeklyPercentUsed
             self.weeklyResetsAt = weeklyResetsAt
             self.opusPercentUsed = opusPercentUsed
+            self.extraRateWindows = extraRateWindows
             self.extraUsageCost = extraUsageCost
             self.accountOrganization = accountOrganization
             self.accountEmail = accountEmail
@@ -131,6 +137,7 @@ public enum ClaudeWebAPIFetcher {
     /// Tries browser cookies using the standard import order.
     public static func fetchUsage(
         browserDetection: BrowserDetection,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
         let log: (String) -> Void = { msg in logger?("[claude-web] \(msg)") }
@@ -140,7 +147,10 @@ public enum ClaudeWebAPIFetcher {
         {
             log("Using cached cookie header from \(cached.sourceLabel)")
             do {
-                return try await self.fetchUsage(cookieHeader: cached.cookieHeader, logger: log)
+                return try await self.fetchUsage(
+                    cookieHeader: cached.cookieHeader,
+                    targetOrganizationID: targetOrganizationID,
+                    logger: log)
             } catch let error as FetchError {
                 switch error {
                 case .unauthorized, .noSessionKeyFound, .invalidSessionKey:
@@ -156,7 +166,10 @@ public enum ClaudeWebAPIFetcher {
         let sessionInfo = try extractSessionKeyInfo(browserDetection: browserDetection, logger: log)
         log("Found session key (\(sessionInfo.cookieCount) cookies)")
 
-        let usage = try await self.fetchUsage(using: sessionInfo, logger: log)
+        let usage = try await self.fetchUsage(
+            using: sessionInfo,
+            targetOrganizationID: targetOrganizationID,
+            logger: log)
         CookieHeaderCache.store(
             provider: .claude,
             cookieHeader: "sessionKey=\(sessionInfo.key)",
@@ -166,28 +179,40 @@ public enum ClaudeWebAPIFetcher {
 
     public static func fetchUsage(
         cookieHeader: String,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
         let log: (String) -> Void = { msg in logger?("[claude-web] \(msg)") }
         let sessionInfo = try self.sessionKeyInfo(cookieHeader: cookieHeader)
         log("Using manual session key (\(sessionInfo.cookieCount) cookies)")
-        return try await self.fetchUsage(using: sessionInfo, logger: log)
+        return try await self.fetchUsage(
+            using: sessionInfo,
+            targetOrganizationID: targetOrganizationID,
+            logger: log)
     }
 
     public static func fetchUsage(
         using sessionKeyInfo: SessionKeyInfo,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
         let log: (String) -> Void = { msg in logger?(msg) }
         let sessionKey = sessionKeyInfo.key
 
         // Fetch organization info
-        let organization = try await fetchOrganizationInfo(sessionKey: sessionKey, logger: log)
+        let organization = try await fetchOrganizationInfo(
+            sessionKey: sessionKey,
+            targetOrganizationID: targetOrganizationID,
+            logger: log)
         log("Organization resolved")
 
         var usage = try await fetchUsageData(orgId: organization.id, sessionKey: sessionKey, logger: log)
         if usage.extraUsageCost == nil,
-           let extra = await fetchExtraUsageCost(orgId: organization.id, sessionKey: sessionKey, logger: log)
+           let extra = await ClaudeWebExtraUsageCost.fetch(
+               baseURL: Self.baseURL,
+               orgId: organization.id,
+               sessionKey: sessionKey,
+               logger: log)
         {
             usage = WebUsageData(
                 sessionPercentUsed: usage.sessionPercentUsed,
@@ -195,6 +220,7 @@ public enum ClaudeWebAPIFetcher {
                 weeklyPercentUsed: usage.weeklyPercentUsed,
                 weeklyResetsAt: usage.weeklyResetsAt,
                 opusPercentUsed: usage.opusPercentUsed,
+                extraRateWindows: usage.extraRateWindows,
                 extraUsageCost: extra,
                 accountOrganization: usage.accountOrganization,
                 accountEmail: usage.accountEmail,
@@ -207,6 +233,7 @@ public enum ClaudeWebAPIFetcher {
                 weeklyPercentUsed: usage.weeklyPercentUsed,
                 weeklyResetsAt: usage.weeklyResetsAt,
                 opusPercentUsed: usage.opusPercentUsed,
+                extraRateWindows: usage.extraRateWindows,
                 extraUsageCost: usage.extraUsageCost,
                 accountOrganization: usage.accountOrganization,
                 accountEmail: account.email,
@@ -219,6 +246,7 @@ public enum ClaudeWebAPIFetcher {
                 weeklyPercentUsed: usage.weeklyPercentUsed,
                 weeklyResetsAt: usage.weeklyResetsAt,
                 opusPercentUsed: usage.opusPercentUsed,
+                extraRateWindows: usage.extraRateWindows,
                 extraUsageCost: usage.extraUsageCost,
                 accountOrganization: name,
                 accountEmail: usage.accountEmail,
@@ -264,7 +292,7 @@ public enum ClaudeWebAPIFetcher {
             request.timeoutInterval = 20
 
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
                 let http = response as? HTTPURLResponse
                 let contentType = http?.allHeaderFields["Content-Type"] as? String
                 let truncated = data.prefix(Self.maxProbeBytes)
@@ -390,6 +418,7 @@ public enum ClaudeWebAPIFetcher {
 
     private static func fetchOrganizationInfo(
         sessionKey: String,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> OrganizationInfo
     {
         let url = URL(string: "\(baseURL)/organizations")!
@@ -399,7 +428,7 @@ public enum ClaudeWebAPIFetcher {
         request.httpMethod = "GET"
         request.timeoutInterval = 15
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw FetchError.invalidResponse
@@ -409,7 +438,7 @@ public enum ClaudeWebAPIFetcher {
 
         switch httpResponse.statusCode {
         case 200:
-            return try self.parseOrganizationResponse(data)
+            return try self.parseOrganizationResponse(data, targetOrganizationID: targetOrganizationID)
         case 401, 403:
             throw FetchError.unauthorized
         default:
@@ -429,7 +458,7 @@ public enum ClaudeWebAPIFetcher {
         request.httpMethod = "GET"
         request.timeoutInterval = 15
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw FetchError.invalidResponse
@@ -439,7 +468,7 @@ public enum ClaudeWebAPIFetcher {
 
         switch httpResponse.statusCode {
         case 200:
-            return try self.parseUsageResponse(data)
+            return try self.parseUsageResponse(data, logger: logger)
         case 401, 403:
             throw FetchError.unauthorized
         default:
@@ -447,7 +476,7 @@ public enum ClaudeWebAPIFetcher {
         }
     }
 
-    private static func parseUsageResponse(_ data: Data) throws -> WebUsageData {
+    private static func parseUsageResponse(_ data: Data, logger: ((String) -> Void)? = nil) throws -> WebUsageData {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw FetchError.invalidResponse
         }
@@ -463,10 +492,8 @@ public enum ClaudeWebAPIFetcher {
                 sessionResets = self.parseISO8601Date(resetsAt)
             }
         }
-        guard let sessionPercent else {
-            // If we can't parse session utilization, treat this as a failure so callers can fall back to the CLI.
-            throw FetchError.invalidResponse
-        }
+        // Enterprise/credit-based accounts return null for five_hour; treat as 0% rather than an error.
+        let resolvedSessionPercent = sessionPercent ?? 0.0
 
         // Parse seven_day (weekly) usage
         var weeklyPercent: Double?
@@ -480,84 +507,40 @@ public enum ClaudeWebAPIFetcher {
             }
         }
 
-        // Parse seven_day_opus (Opus-specific weekly) usage
+        // Parse seven_day_sonnet (preferred) / seven_day_opus usage
         var opusPercent: Double?
-        if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
-            if let utilization = sevenDayOpus["utilization"] as? Int {
-                opusPercent = Double(utilization)
-            }
+        if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any] {
+            opusPercent = Self.percentValue(from: sevenDaySonnet["utilization"])
+        } else if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
+            opusPercent = Self.percentValue(from: sevenDayOpus["utilization"])
         }
+        let extraRateParse = ClaudeWebExtraRateWindowParser.parse(from: json)
+        if let sourceKey = extraRateParse.sourceKeys["claude-routines"] {
+            logger?("Usage API extra window key matched: routines=\(sourceKey)")
+        }
+        let extraUsageCost = ClaudeWebExtraUsageCost.parse(from: json["extra_usage"])
 
         return WebUsageData(
-            sessionPercentUsed: sessionPercent,
+            sessionPercentUsed: resolvedSessionPercent,
             sessionResetsAt: sessionResets,
             weeklyPercentUsed: weeklyPercent,
             weeklyResetsAt: weeklyResets,
             opusPercentUsed: opusPercent,
-            extraUsageCost: nil,
+            extraRateWindows: extraRateParse.windows,
+            extraUsageCost: extraUsageCost,
             accountOrganization: nil,
             accountEmail: nil,
             loginMethod: nil)
     }
 
-    // MARK: - Extra usage cost (Claude "Extra")
-
-    private struct OverageSpendLimitResponse: Decodable {
-        let monthlyCreditLimit: Double?
-        let currency: String?
-        let usedCredits: Double?
-        let isEnabled: Bool?
-
-        enum CodingKeys: String, CodingKey {
-            case monthlyCreditLimit = "monthly_credit_limit"
-            case currency
-            case usedCredits = "used_credits"
-            case isEnabled = "is_enabled"
+    private static func percentValue(from value: Any?) -> Double? {
+        if let intValue = value as? Int {
+            return Double(intValue)
         }
-    }
-
-    /// Best-effort fetch of Claude Extra spend/limit (does not fail the main usage fetch).
-    private static func fetchExtraUsageCost(
-        orgId: String,
-        sessionKey: String,
-        logger: ((String) -> Void)? = nil) async -> ProviderCostSnapshot?
-    {
-        let url = URL(string: "\(baseURL)/organizations/\(orgId)/overage_spend_limit")!
-        var request = URLRequest(url: url)
-        request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpMethod = "GET"
-        request.timeoutInterval = 15
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else { return nil }
-            logger?("Overage API status: \(httpResponse.statusCode)")
-            guard httpResponse.statusCode == 200 else { return nil }
-            return Self.parseOverageSpendLimit(data)
-        } catch {
-            return nil
+        if let doubleValue = value as? Double {
+            return doubleValue
         }
-    }
-
-    private static func parseOverageSpendLimit(_ data: Data) -> ProviderCostSnapshot? {
-        guard let decoded = try? JSONDecoder().decode(OverageSpendLimitResponse.self, from: data) else { return nil }
-        guard decoded.isEnabled == true else { return nil }
-        guard let used = decoded.usedCredits,
-              let limit = decoded.monthlyCreditLimit,
-              let currency = decoded.currency,
-              !currency.isEmpty else { return nil }
-
-        let usedAmount = used / 100.0
-        let limitAmount = limit / 100.0
-
-        return ProviderCostSnapshot(
-            used: usedAmount,
-            limit: limitAmount,
-            currencyCode: currency,
-            period: "Monthly",
-            resetsAt: nil,
-            updatedAt: Date())
+        return nil
     }
 
     #if DEBUG
@@ -568,12 +551,15 @@ public enum ClaudeWebAPIFetcher {
         try self.parseUsageResponse(data)
     }
 
-    public static func _parseOrganizationsResponseForTesting(_ data: Data) throws -> OrganizationInfo {
-        try self.parseOrganizationResponse(data)
+    public static func _parseOrganizationsResponseForTesting(
+        _ data: Data,
+        targetOrganizationID: String? = nil) throws -> OrganizationInfo
+    {
+        try self.parseOrganizationResponse(data, targetOrganizationID: targetOrganizationID)
     }
 
     public static func _parseOverageSpendLimitForTesting(_ data: Data) -> ProviderCostSnapshot? {
-        self.parseOverageSpendLimit(data)
+        ClaudeWebExtraUsageCost.parseOverageSpendLimit(data)
     }
 
     public static func _parseAccountInfoForTesting(_ data: Data, orgId: String?) -> WebAccountInfo? {
@@ -592,28 +578,20 @@ public enum ClaudeWebAPIFetcher {
         return formatter.date(from: string)
     }
 
-    private struct OrganizationResponse: Decodable {
-        let uuid: String
-        let name: String?
-        let capabilities: [String]?
-
-        var normalizedCapabilities: Set<String> {
-            Set((self.capabilities ?? []).map { $0.lowercased() })
-        }
-
-        var hasChatCapability: Bool {
-            self.normalizedCapabilities.contains("chat")
-        }
-
-        var isApiOnly: Bool {
-            let normalized = self.normalizedCapabilities
-            return !normalized.isEmpty && normalized == ["api"]
-        }
-    }
-
-    private static func parseOrganizationResponse(_ data: Data) throws -> OrganizationInfo {
-        guard let organizations = try? JSONDecoder().decode([OrganizationResponse].self, from: data) else {
+    private static func parseOrganizationResponse(
+        _ data: Data,
+        targetOrganizationID: String? = nil) throws -> OrganizationInfo
+    {
+        guard let organizations = try? JSONDecoder().decode([ClaudeWebOrganizationResponse].self, from: data) else {
             throw FetchError.invalidResponse
+        }
+        if let targetOrganizationID = targetOrganizationID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !targetOrganizationID.isEmpty
+        {
+            guard let selected = organizations.first(where: { $0.uuid == targetOrganizationID }) else {
+                throw FetchError.organizationNotFound(targetOrganizationID)
+            }
+            return self.organizationInfo(from: selected)
         }
         guard let selected = organizations.first(where: { $0.hasChatCapability })
             ?? organizations.first(where: { !$0.isApiOnly })
@@ -621,6 +599,10 @@ public enum ClaudeWebAPIFetcher {
         else {
             throw FetchError.noOrganization
         }
+        return self.organizationInfo(from: selected)
+    }
+
+    private static func organizationInfo(from selected: ClaudeWebOrganizationResponse) -> OrganizationInfo {
         let name = selected.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sanitized = (name?.isEmpty ?? true) ? nil : name
         return OrganizationInfo(id: selected.uuid, name: sanitized)
@@ -677,7 +659,7 @@ public enum ClaudeWebAPIFetcher {
         request.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else { return nil }
             logger?("Account API status: \(httpResponse.statusCode)")
             guard httpResponse.statusCode == 200 else { return nil }
@@ -830,26 +812,32 @@ public enum ClaudeWebAPIFetcher {
 
     public static func fetchUsage(
         browserDetection: BrowserDetection,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
         _ = browserDetection
+        _ = targetOrganizationID
         _ = logger
         throw FetchError.notSupportedOnThisPlatform
     }
 
     public static func fetchUsage(
         cookieHeader: String,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
         _ = cookieHeader
+        _ = targetOrganizationID
         _ = logger
         throw FetchError.notSupportedOnThisPlatform
     }
 
     public static func fetchUsage(
         using sessionKeyInfo: SessionKeyInfo,
+        targetOrganizationID: String? = nil,
         logger: ((String) -> Void)? = nil) async throws -> WebUsageData
     {
+        _ = targetOrganizationID
         throw FetchError.notSupportedOnThisPlatform
     }
 
@@ -883,4 +871,123 @@ public enum ClaudeWebAPIFetcher {
     }
 
     #endif
+}
+
+private enum ClaudeWebExtraUsageCost {
+    // MARK: - Extra usage cost (Claude "Extra")
+
+    static func parse(from value: Any?) -> ProviderCostSnapshot? {
+        guard let extraUsage = value as? [String: Any] else { return nil }
+        guard let used = Self.doubleValue(extraUsage["used_credits"]),
+              let limit = Self.doubleValue(extraUsage["monthly_limit"] ?? extraUsage["monthly_credit_limit"]),
+              limit > 0 else { return nil }
+        let currency = (extraUsage["currency"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currencyCode = currency?.isEmpty == false ? currency ?? "USD" : "USD"
+        return Self.makeExtraUsageCost(
+            usedCredits: used,
+            monthlyCreditLimit: limit,
+            currencyCode: currencyCode)
+    }
+
+    struct OverageSpendLimitResponse: Decodable {
+        let monthlyCreditLimit: Double?
+        let currency: String?
+        let usedCredits: Double?
+        let isEnabled: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case monthlyCreditLimit = "monthly_credit_limit"
+            case currency
+            case usedCredits = "used_credits"
+            case isEnabled = "is_enabled"
+        }
+    }
+
+    /// Best-effort fetch of Claude Extra spend/limit (does not fail the main usage fetch).
+    static func fetch(
+        baseURL: String,
+        orgId: String,
+        sessionKey: String,
+        logger: ((String) -> Void)? = nil) async -> ProviderCostSnapshot?
+    {
+        let url = URL(string: "\(baseURL)/organizations/\(orgId)/overage_spend_limit")!
+        var request = URLRequest(url: url)
+        request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await ProviderHTTPClient.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return nil }
+            logger?("Overage API status: \(httpResponse.statusCode)")
+            guard httpResponse.statusCode == 200 else { return nil }
+            return Self.parseOverageSpendLimit(data)
+        } catch {
+            return nil
+        }
+    }
+
+    static func parseOverageSpendLimit(_ data: Data) -> ProviderCostSnapshot? {
+        guard let decoded = try? JSONDecoder().decode(OverageSpendLimitResponse.self, from: data) else { return nil }
+        guard decoded.isEnabled == true else { return nil }
+        guard let used = decoded.usedCredits,
+              let limit = decoded.monthlyCreditLimit,
+              let currency = decoded.currency,
+              !currency.isEmpty else { return nil }
+
+        return Self.makeExtraUsageCost(
+            usedCredits: used,
+            monthlyCreditLimit: limit,
+            currencyCode: currency)
+    }
+
+    static func makeExtraUsageCost(
+        usedCredits: Double,
+        monthlyCreditLimit: Double,
+        currencyCode: String) -> ProviderCostSnapshot
+    {
+        let usedAmount = usedCredits / 100.0
+        let limitAmount = monthlyCreditLimit / 100.0
+
+        return ProviderCostSnapshot(
+            used: usedAmount,
+            limit: limitAmount,
+            currencyCode: currencyCode,
+            period: "Monthly cap",
+            resetsAt: nil,
+            updatedAt: Date())
+    }
+
+    static func doubleValue(_ value: Any?) -> Double? {
+        switch value {
+        case let int as Int:
+            Double(int)
+        case let double as Double:
+            double
+        case let string as String:
+            Double(string)
+        default:
+            nil
+        }
+    }
+}
+
+private struct ClaudeWebOrganizationResponse: Decodable {
+    let uuid: String
+    let name: String?
+    let capabilities: [String]?
+
+    var normalizedCapabilities: Set<String> {
+        Set((self.capabilities ?? []).map { $0.lowercased() })
+    }
+
+    var hasChatCapability: Bool {
+        self.normalizedCapabilities.contains("chat")
+    }
+
+    var isApiOnly: Bool {
+        let normalized = self.normalizedCapabilities
+        return !normalized.isEmpty && normalized == ["api"]
+    }
 }

@@ -9,16 +9,25 @@ struct ProvidersPane: View {
     let managedCodexAccountCoordinator: ManagedCodexAccountCoordinator
     let codexAccountPromotionCoordinator: CodexAccountPromotionCoordinator
     let codexAmbientLoginRunner: any CodexAmbientLoginRunning
+    let runProviderLoginFlow: @MainActor (UsageProvider) async -> Void
     @State private var expandedErrors: Set<UsageProvider> = []
     @State private var settingsStatusTextByID: [String: String] = [:]
     @State private var settingsLastAppActiveRunAtByID: [String: Date] = [:]
     @State private var activeConfirmation: ProviderSettingsConfirmationState?
     @State private var codexAccountsNotice: CodexAccountsSectionNotice?
     @State private var isAuthenticatingLiveCodexAccount = false
+    @State private var providerSearchText = ""
     @State private var selectedProvider: UsageProvider?
 
     private var providers: [UsageProvider] {
         self.settings.orderedProviders()
+    }
+
+    private var filteredProviders: [UsageProvider] {
+        Self.filteredProviders(
+            self.providers,
+            query: self.providerSearchText,
+            displayName: { provider in self.store.metadata(for: provider).displayName })
     }
 
     init(
@@ -26,7 +35,8 @@ struct ProvidersPane: View {
         store: UsageStore,
         managedCodexAccountCoordinator: ManagedCodexAccountCoordinator = ManagedCodexAccountCoordinator(),
         codexAccountPromotionCoordinator: CodexAccountPromotionCoordinator? = nil,
-        codexAmbientLoginRunner: any CodexAmbientLoginRunning = DefaultCodexAmbientLoginRunner())
+        codexAmbientLoginRunner: any CodexAmbientLoginRunning = DefaultCodexAmbientLoginRunner(),
+        runProviderLoginFlow: @escaping @MainActor (UsageProvider) async -> Void = { _ in })
     {
         self.settings = settings
         self.store = store
@@ -37,21 +47,24 @@ struct ProvidersPane: View {
                 usageStore: store,
                 managedAccountCoordinator: managedCodexAccountCoordinator)
         self.codexAmbientLoginRunner = codexAmbientLoginRunner
+        self.runProviderLoginFlow = runProviderLoginFlow
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             ProviderSidebarListView(
-                providers: self.providers,
+                providers: self.filteredProviders,
+                orderedProviders: self.providers,
                 store: self.store,
                 isEnabled: { provider in self.binding(for: provider) },
                 subtitle: { provider in self.providerSubtitle(provider) },
+                searchText: self.$providerSearchText,
                 selection: self.$selectedProvider,
                 moveProviders: { fromOffsets, toOffset in
                     self.settings.moveProvider(fromOffsets: fromOffsets, toOffset: toOffset)
                 })
 
-            if let provider = self.selectedProvider ?? self.providers.first {
+            if let provider = self.selectedVisibleProvider {
                 ProviderDetailView(
                     provider: provider,
                     store: self.store,
@@ -61,7 +74,9 @@ struct ProvidersPane: View {
                     settingsPickers: self.extraSettingsPickers(for: provider),
                     settingsToggles: self.extraSettingsToggles(for: provider),
                     settingsFields: self.extraSettingsFields(for: provider),
+                    settingsActions: self.extraSettingsActions(for: provider),
                     settingsTokenAccounts: self.tokenAccountDescriptor(for: provider),
+                    settingsOrganizations: self.extraSettingsOrganizations(for: provider),
                     errorDisplay: self.providerErrorDisplay(provider),
                     isErrorExpanded: self.expandedBinding(for: provider),
                     onCopyError: { text in self.copyToPasteboard(text) },
@@ -99,7 +114,7 @@ struct ProvidersPane: View {
                         }
                     })
             } else {
-                Text("Select a provider")
+                Text(L("select_a_provider"))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
@@ -109,6 +124,9 @@ struct ProvidersPane: View {
             self.ensureSelection()
         }
         .onChange(of: self.providers) { _, _ in
+            self.ensureSelection()
+        }
+        .onChange(of: self.providerSearchText) { _, _ in
             self.ensureSelection()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -127,7 +145,7 @@ struct ProvidersPane: View {
                         active.onConfirm()
                         self.activeConfirmation = nil
                     }
-                    Button("Cancel", role: .cancel) { self.activeConfirmation = nil }
+                    Button(L("cancel"), role: .cancel) { self.activeConfirmation = nil }
                 }
             },
             message: {
@@ -137,15 +155,38 @@ struct ProvidersPane: View {
             })
     }
 
+    private var selectedVisibleProvider: UsageProvider? {
+        let filteredProviders = self.filteredProviders
+        if let selected = self.selectedProvider, filteredProviders.contains(selected) {
+            return selected
+        }
+        return filteredProviders.first
+    }
+
+    static func filteredProviders(
+        _ providers: [UsageProvider],
+        query: String,
+        displayName: (UsageProvider) -> String) -> [UsageProvider]
+    {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return providers }
+
+        return providers.filter { provider in
+            displayName(provider).localizedCaseInsensitiveContains(trimmedQuery)
+                || provider.rawValue.localizedCaseInsensitiveContains(trimmedQuery)
+        }
+    }
+
     private func ensureSelection() {
-        guard !self.providers.isEmpty else {
+        let filteredProviders = self.filteredProviders
+        guard !filteredProviders.isEmpty else {
             self.selectedProvider = nil
             return
         }
-        if let selected = self.selectedProvider, self.providers.contains(selected) {
+        if let selected = self.selectedProvider, filteredProviders.contains(selected) {
             return
         }
-        self.selectedProvider = self.providers.first
+        self.selectedProvider = filteredProviders.first
     }
 
     private func triggerRefresh(for provider: UsageProvider) {
@@ -176,9 +217,9 @@ struct ProvidersPane: View {
             let relative = snapshot.updatedAt.relativeDescription()
             usageText = relative
         } else if self.store.isStale(provider: provider) {
-            usageText = "last fetch failed"
+            usageText = L("last_fetch_failed")
         } else {
-            usageText = "usage not fetched yet"
+            usageText = L("usage_not_fetched_yet")
         }
 
         let presentationContext = ProviderPresentationContext(
@@ -199,8 +240,7 @@ struct ProvidersPane: View {
         let projection = self.settings.codexVisibleAccountProjection
         let degradedNotice: CodexAccountsSectionNotice? = if projection.hasUnreadableAddedAccountStore {
             CodexAccountsSectionNotice(
-                text: "Managed account storage is unreadable. Live account access is still available, "
-                    + "but managed add, re-auth, and remove actions are disabled until the store is recoverable.",
+                text: L("managed_account_storage_unreadable"),
                 tone: .warning)
         } else {
             nil
@@ -303,9 +343,9 @@ struct ProvidersPane: View {
     func requestManagedCodexAccountRemoval(_ account: CodexVisibleAccount) {
         guard let accountID = account.storedAccountID else { return }
         self.activeConfirmation = ProviderSettingsConfirmationState(
-            title: "Remove Codex account?",
-            message: "Remove \(account.email) from CodexBar? Its managed Codex home will be deleted.",
-            confirmTitle: "Remove",
+            title: L("remove_codex_account_title"),
+            message: String(format: L("remove_account_message"), account.email),
+            confirmTitle: L("remove"),
             onConfirm: {
                 Task { @MainActor in
                     await self.removeManagedCodexAccount(id: accountID)
@@ -346,6 +386,21 @@ struct ProvidersPane: View {
             .filter { $0.isVisible?() ?? true }
     }
 
+    private func extraSettingsActions(for provider: UsageProvider) -> [ProviderSettingsActionsDescriptor] {
+        guard let impl = ProviderCatalog.implementation(for: provider) else { return [] }
+        let context = self.makeSettingsContext(provider: provider)
+        return impl.settingsActions(context: context)
+            .filter { $0.isVisible?() ?? true }
+    }
+
+    private func extraSettingsOrganizations(
+        for provider: UsageProvider) -> ProviderSettingsOrganizationsDescriptor?
+    {
+        guard let impl = ProviderCatalog.implementation(for: provider) else { return nil }
+        let context = self.makeSettingsContext(provider: provider)
+        return impl.settingsOrganizations(context: context)
+    }
+
     func tokenAccountDescriptor(for provider: UsageProvider) -> ProviderSettingsTokenAccountsDescriptor? {
         guard let support = TokenAccountSupportCatalog.support(for: provider) else { return nil }
         let context = self.makeSettingsContext(provider: provider)
@@ -374,8 +429,13 @@ struct ProvidersPane: View {
                     }
                 }
             },
-            addAccount: { label, token in
-                self.settings.addTokenAccount(provider: provider, label: label, token: token)
+            showsOrganizationField: provider == .claude,
+            addAccount: { label, token, organizationID in
+                self.settings.addTokenAccount(
+                    provider: provider,
+                    label: label,
+                    token: token,
+                    organizationID: organizationID)
                 Task { @MainActor in
                     await ProviderInteractionContext.$current.withValue(.userInitiated) {
                         await self.store.refreshProvider(provider, allowDisabled: true)
@@ -390,6 +450,13 @@ struct ProvidersPane: View {
                     }
                 }
             },
+            primaryAddActionTitle: provider == .copilot ? "Add Account" : nil,
+            primaryAddAction: provider == .copilot ? {
+                await CopilotLoginFlow.run(settings: self.settings)
+                await ProviderInteractionContext.$current.withValue(.userInitiated) {
+                    await self.store.refreshProvider(provider, allowDisabled: true)
+                }
+            } : nil,
             openConfigFile: {
                 self.settings.openTokenAccountsFile()
             },
@@ -440,6 +507,9 @@ struct ProvidersPane: View {
             },
             requestConfirmation: { confirmation in
                 self.activeConfirmation = ProviderSettingsConfirmationState(confirmation: confirmation)
+            },
+            runLoginFlow: {
+                await self.runProviderLoginFlow(provider)
             })
     }
 
@@ -447,42 +517,60 @@ struct ProvidersPane: View {
         let options: [ProviderSettingsPickerOption]
         if provider == .openrouter {
             options = [
-                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: "Automatic"),
+                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: L("automatic")),
                 ProviderSettingsPickerOption(
                     id: MenuBarMetricPreference.primary.rawValue,
-                    title: "Primary (API key limit)"),
+                    title: L("primary_api_key_limit")),
+            ]
+        } else if SettingsStore.isBalanceOnlyProvider(provider) {
+            options = [
+                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: L("Automatic")),
+            ]
+        } else if provider == .abacus {
+            let metadata = self.store.metadata(for: provider)
+            options = [
+                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: L("automatic")),
+                ProviderSettingsPickerOption(
+                    id: MenuBarMetricPreference.primary.rawValue,
+                    title: String(format: L("metric_primary"), metadata.sessionLabel)),
             ]
         } else {
             let metadata = self.store.metadata(for: provider)
             let snapshot = self.store.snapshot(for: provider)
             let supportsAverage = self.settings.menuBarMetricSupportsAverage(for: provider)
             let supportsTertiary = self.settings.menuBarMetricSupportsTertiary(for: provider, snapshot: snapshot)
+            let supportsExtraUsage = self.settings.menuBarMetricSupportsExtraUsage(for: provider, snapshot: snapshot)
             var metricOptions: [ProviderSettingsPickerOption] = [
-                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: "Automatic"),
+                ProviderSettingsPickerOption(id: MenuBarMetricPreference.automatic.rawValue, title: L("automatic")),
                 ProviderSettingsPickerOption(
                     id: MenuBarMetricPreference.primary.rawValue,
-                    title: "Primary (\(metadata.sessionLabel))"),
+                    title: String(format: L("metric_primary"), metadata.sessionLabel)),
                 ProviderSettingsPickerOption(
                     id: MenuBarMetricPreference.secondary.rawValue,
-                    title: "Secondary (\(metadata.weeklyLabel))"),
+                    title: String(format: L("metric_secondary"), metadata.weeklyLabel)),
             ]
             if supportsTertiary {
                 let tertiaryTitle = metadata.opusLabel ?? MenuBarMetricPreference.tertiary.label
                 metricOptions.append(ProviderSettingsPickerOption(
                     id: MenuBarMetricPreference.tertiary.rawValue,
-                    title: "Tertiary (\(tertiaryTitle))"))
+                    title: String(format: L("metric_tertiary"), tertiaryTitle)))
+            }
+            if supportsExtraUsage {
+                metricOptions.append(ProviderSettingsPickerOption(
+                    id: MenuBarMetricPreference.extraUsage.rawValue,
+                    title: MenuBarMetricPreference.extraUsage.label))
             }
             if supportsAverage {
                 metricOptions.append(ProviderSettingsPickerOption(
                     id: MenuBarMetricPreference.average.rawValue,
-                    title: "Average (\(metadata.sessionLabel) + \(metadata.weeklyLabel))"))
+                    title: String(format: L("metric_average"), metadata.sessionLabel, metadata.weeklyLabel)))
             }
             options = metricOptions
         }
         return ProviderSettingsPickerDescriptor(
             id: "menuBarMetric",
-            title: "Menu bar metric",
-            subtitle: "Choose which window drives the menu bar percent.",
+            title: L("menu_bar_metric_title"),
+            subtitle: Self.menuBarMetricPickerSubtitle(for: provider),
             binding: Binding(
                 get: {
                     self.settings
@@ -496,6 +584,21 @@ struct ProvidersPane: View {
             options: options,
             isVisible: { true },
             onChange: nil)
+    }
+
+    private static func menuBarMetricPickerSubtitle(for provider: UsageProvider) -> String {
+        switch provider {
+        case .deepseek:
+            L("menu_bar_metric_subtitle_deepseek")
+        case .moonshot:
+            L("menu_bar_metric_subtitle_moonshot")
+        case .mistral:
+            L("menu_bar_metric_subtitle_mistral")
+        case .kimik2:
+            L("menu_bar_metric_subtitle_kimik2")
+        default:
+            L("menu_bar_metric_subtitle")
+        }
     }
 
     func menuCardModel(for provider: UsageProvider) -> UsageMenuCardView.Model {
@@ -519,7 +622,7 @@ struct ProvidersPane: View {
             dashboardError = codexProjection.userFacingErrors.dashboard
             tokenSnapshot = self.store.tokenSnapshot(for: provider)
             tokenError = self.store.tokenError(for: provider)
-        } else if provider == .claude || provider == .vertexai {
+        } else if ProviderDescriptorRegistry.descriptor(for: provider).tokenCost.supportsTokenCost {
             credits = nil
             creditsError = nil
             dashboard = nil
@@ -535,12 +638,14 @@ struct ProvidersPane: View {
             tokenError = nil
         }
 
+        // Abacus uses primary for monthly credits (no secondary window)
+        let paceWindow = provider == .abacus ? snapshot?.primary : snapshot?.secondary
         let weeklyPace = if let codexProjection,
                             let weekly = codexProjection.rateWindow(for: .weekly)
         {
             self.store.weeklyPace(provider: provider, window: weekly, now: now)
         } else {
-            snapshot?.secondary.flatMap { window in
+            paceWindow.flatMap { window in
                 self.store.weeklyPace(provider: provider, window: window, now: now)
             }
         }
@@ -564,8 +669,19 @@ struct ProvidersPane: View {
             showOptionalCreditsAndExtraUsage: self.settings.showOptionalCreditsAndExtraUsage,
             hidePersonalInfo: self.settings.hidePersonalInfo,
             weeklyPace: weeklyPace,
+            quotaWarningThresholds: [
+                .session: self.quotaWarningMarkerThresholds(provider: provider, window: .session),
+                .weekly: self.quotaWarningMarkerThresholds(provider: provider, window: .weekly),
+            ],
+            workDaysPerWeek: self.settings.weeklyProgressWorkDays,
             now: now)
         return UsageMenuCardView.Model.make(input)
+    }
+
+    private func quotaWarningMarkerThresholds(provider: UsageProvider, window: QuotaWarningWindow) -> [Int] {
+        guard self.settings.quotaWarningMarkersVisible else { return [] }
+        guard self.settings.quotaWarningEnabled(provider: provider, window: window) else { return [] }
+        return self.settings.resolvedQuotaWarningThresholds(provider: provider, window: window)
     }
 
     private func refreshCodexProvider() async {
@@ -583,22 +699,12 @@ struct ProvidersPane: View {
            error == .authenticationInProgress
         {
             return CodexAccountsSectionNotice(
-                text: "A managed Codex login is already running. Wait for it to finish before adding "
-                    + "or re-authenticating another account.",
+                text: L("managed_login_already_running"),
                 tone: .warning)
         }
 
         if let error = error as? ManagedCodexAccountServiceError {
-            let message = switch error {
-            case .loginFailed:
-                "Managed Codex login did not complete. Try again after finishing the browser login flow."
-            case .missingEmail:
-                "Codex login completed, but no account email was available. Try again after confirming "
-                    + "the account is fully signed in."
-            case let .unsafeManagedHome(path):
-                "CodexBar refused to modify an unexpected managed home path: \(path)"
-            }
-            return CodexAccountsSectionNotice(text: message, tone: .warning)
+            return CodexAccountsSectionNotice(text: error.userFacingMessage, tone: .warning)
         }
 
         return CodexAccountsSectionNotice(
@@ -608,8 +714,8 @@ struct ProvidersPane: View {
 
     private func presentLoginAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
+        alert.messageText = L(title)
+        alert.informativeText = L(message)
         alert.alertStyle = .warning
         alert.runModal()
     }
@@ -674,9 +780,9 @@ struct ProviderSettingsConfirmationState: Identifiable {
     }
 
     init(confirmation: ProviderSettingsConfirmation) {
-        self.title = confirmation.title
-        self.message = confirmation.message
-        self.confirmTitle = confirmation.confirmTitle
+        self.title = L(confirmation.title)
+        self.message = L(confirmation.message)
+        self.confirmTitle = L(confirmation.confirmTitle)
         self.onConfirm = confirmation.onConfirm
     }
 }

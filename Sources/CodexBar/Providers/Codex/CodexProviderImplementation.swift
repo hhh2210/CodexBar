@@ -24,7 +24,9 @@ struct CodexProviderImplementation: ProviderImplementation {
 
     @MainActor
     func settingsSnapshot(context: ProviderSettingsSnapshotContext) -> ProviderSettingsSnapshotContribution? {
-        .codex(context.settings.codexSettingsSnapshot(tokenOverride: context.tokenOverride))
+        .codex(context.settings.codexSettingsSnapshot(
+            tokenOverride: context.tokenOverride,
+            activeSourceOverride: context.codexActiveSourceOverride))
     }
 
     @MainActor
@@ -199,9 +201,13 @@ struct CodexProviderImplementation: ProviderImplementation {
         else { return }
 
         if let credits = context.store.credits {
-            entries.append(.text("Credits: \(UsageFormatter.creditsString(from: credits.remaining))", .primary))
+            entries.append(.text(
+                String(format: L("credits_remaining"), UsageFormatter.creditsString(from: credits.remaining)),
+                .primary))
             if let latest = credits.events.first {
-                entries.append(.text("Last spend: \(UsageFormatter.creditEventSummary(latest))", .secondary))
+                entries.append(.text(
+                    String(format: L("last_spend"), UsageFormatter.creditEventSummary(latest)),
+                    .secondary))
             }
         } else {
             let hint = context.store.userFacingLastCreditsError ?? context.metadata.creditsHint
@@ -234,6 +240,9 @@ struct CodexProviderImplementation: ProviderImplementation {
                 action: action,
                 isEnabled: isEnabled,
                 isChecked: isChecked)
+        }
+        guard submenuItems.count > 1 || submenuItems.contains(where: { $0.isEnabled && $0.action != nil }) else {
+            return
         }
 
         entries.append(.submenu(

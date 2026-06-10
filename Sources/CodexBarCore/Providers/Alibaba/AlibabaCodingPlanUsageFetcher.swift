@@ -108,18 +108,15 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
         request.setValue(region.gatewayBaseURLString, forHTTPHeaderField: "Origin")
         request.setValue(region.dashboardURL.absoluteString, forHTTPHeaderField: "Referer")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AlibabaCodingPlanUsageError.networkError("Invalid response")
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+        let response = try await ProviderHTTPClient.shared.response(for: request)
+        let data = response.data
+        guard response.statusCode == 200 else {
+            if response.statusCode == 401 || response.statusCode == 403 {
                 throw AlibabaCodingPlanUsageError.invalidCredentials
             }
             let body = String(data: data, encoding: .utf8) ?? ""
-            Self.log.error("Alibaba Coding Plan returned \(httpResponse.statusCode): \(body)")
-            throw AlibabaCodingPlanUsageError.apiError("HTTP \(httpResponse.statusCode)")
+            Self.log.error("Alibaba Coding Plan returned \(response.statusCode): \(body)")
+            throw AlibabaCodingPlanUsageError.apiError("HTTP \(response.statusCode)")
         }
 
         return try self.parseUsageSnapshot(from: data, now: now, authMode: .apiKey)
@@ -158,18 +155,15 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
         request.setValue(region.gatewayBaseURLString, forHTTPHeaderField: "Origin")
         request.setValue(region.consoleRefererURL.absoluteString, forHTTPHeaderField: "Referer")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AlibabaCodingPlanUsageError.networkError("Invalid response")
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+        let response = try await ProviderHTTPClient.shared.response(for: request)
+        let data = response.data
+        guard response.statusCode == 200 else {
+            if response.statusCode == 401 || response.statusCode == 403 {
                 throw AlibabaCodingPlanUsageError.loginRequired
             }
             let body = String(data: data, encoding: .utf8) ?? ""
-            Self.log.error("Alibaba Coding Plan returned \(httpResponse.statusCode): \(body)")
-            throw AlibabaCodingPlanUsageError.apiError("HTTP \(httpResponse.statusCode)")
+            Self.log.error("Alibaba Coding Plan returned \(response.statusCode): \(body)")
+            throw AlibabaCodingPlanUsageError.apiError("HTTP \(response.statusCode)")
         }
 
         return try self.parseUsageSnapshot(from: data, now: now, authMode: .webSession)
@@ -338,10 +332,9 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             forHTTPHeaderField: "Accept")
 
-        if let (data, response) = try? await URLSession.shared.data(for: request),
-           let httpResponse = response as? HTTPURLResponse,
-           httpResponse.statusCode == 200,
-           let html = String(data: data, encoding: .utf8),
+        if let response = try? await ProviderHTTPClient.shared.response(for: request),
+           response.statusCode == 200,
+           let html = String(data: response.data, encoding: .utf8),
            let token = self.extractConsoleSECToken(from: html),
            !token.isEmpty
         {
@@ -404,12 +397,12 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
             .absoluteString + "/"
         request.setValue(referer, forHTTPHeaderField: "Referer")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        let response = try await ProviderHTTPClient.shared.response(for: request)
+        guard response.statusCode == 200 else {
             return nil
         }
 
-        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        let object = try JSONSerialization.jsonObject(with: response.data, options: [])
         let expanded = self.expandedJSON(object)
         return self.findFirstString(forKeys: ["secToken", "sec_token"], in: expanded)
     }
@@ -480,9 +473,7 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
             let normalizedCode = codeText.lowercased()
             if normalizedCode.contains("needlogin") || normalizedCode.contains("login") {
                 if authMode == .apiKey {
-                    throw AlibabaCodingPlanUsageError.apiError(
-                        "This Alibaba endpoint requires a console session for this account/region. " +
-                            "API key mode may be unavailable in CN on this endpoint.")
+                    throw AlibabaCodingPlanUsageError.apiKeyUnavailableInRegion
                 }
                 throw AlibabaCodingPlanUsageError.loginRequired
             }
@@ -491,11 +482,15 @@ public struct AlibabaCodingPlanUsageFetcher: Sendable {
             let normalizedMessage = messageText.lowercased()
             if normalizedMessage.contains("log in") || normalizedMessage.contains("login") {
                 if authMode == .apiKey {
-                    throw AlibabaCodingPlanUsageError.apiError(
-                        "This Alibaba endpoint requires a console session for this account/region. " +
-                            "API key mode may be unavailable in CN on this endpoint.")
+                    throw AlibabaCodingPlanUsageError.apiKeyUnavailableInRegion
                 }
                 throw AlibabaCodingPlanUsageError.loginRequired
+            }
+            if authMode == .apiKey,
+               normalizedMessage.contains("console session") ||
+               normalizedMessage.contains("api key mode may be unavailable")
+            {
+                throw AlibabaCodingPlanUsageError.apiKeyUnavailableInRegion
             }
         }
 
@@ -1079,6 +1074,7 @@ public enum AlibabaCodingPlanUsageError: LocalizedError, Sendable, Equatable {
     case networkError(String)
     case apiError(String)
     case parseFailed(String)
+    case apiKeyUnavailableInRegion
 
     var shouldRetryOnAlternateRegion: Bool {
         switch self {
@@ -1086,6 +1082,8 @@ public enum AlibabaCodingPlanUsageError: LocalizedError, Sendable, Equatable {
             true
         case .invalidCredentials:
             true
+        case .apiKeyUnavailableInRegion:
+            false
         case let .apiError(message):
             message.contains("HTTP 404") || message.contains("HTTP 403")
         case let .parseFailed(message):
@@ -1099,9 +1097,13 @@ public enum AlibabaCodingPlanUsageError: LocalizedError, Sendable, Equatable {
         switch self {
         case .loginRequired:
             "Alibaba Coding Plan console login is required. " +
-                "Sign in to Model Studio in a supported browser or paste a Cookie header."
+                "Sign in to Model Studio/Bailian in a supported browser or paste a Cookie header."
         case .invalidCredentials:
             "Alibaba Coding Plan API credentials are invalid or expired."
+        case .apiKeyUnavailableInRegion:
+            "Alibaba Coding Plan quota is not available through Coding Plan API keys for this account/region. " +
+                "Use cookie authentication in Settings -> Providers -> Alibaba if the Alibaba console exposes a " +
+                "compatible session, or switch regions if quota API access is available there."
         case let .networkError(message):
             "Alibaba Coding Plan network error: \(message)"
         case let .apiError(message):

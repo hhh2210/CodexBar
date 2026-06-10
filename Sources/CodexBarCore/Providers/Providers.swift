@@ -4,17 +4,21 @@ import SweetCookieKit
 // swiftformat:disable sortDeclarations
 public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case codex
+    case openai
+    case azureopenai
     case claude
     case cursor
     case opencode
     case opencodego
     case alibaba
+    case alibabatokenplan
     case factory
     case gemini
     case antigravity
     case copilot
     case zai
     case minimax
+    case manus
     case kimi
     case kilo
     case kiro
@@ -22,21 +26,42 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case augment
     case jetbrains
     case kimik2
+    case moonshot
     case amp
+    case t3chat
     case ollama
     case synthetic
     case warp
     case openrouter
+    case elevenlabs
+    case windsurf
     case perplexity
+    case mimo
+    case doubao
+    case abacus
+    case mistral
+    case deepseek
+    case codebuff
+    case crof
+    case venice
+    case commandcode
+    case stepfun
+    case bedrock
+    case grok
+    case groq
+    case llmproxy
+    case deepgram
 }
 
 // swiftformat:enable sortDeclarations
 
-public enum IconStyle: Sendable, CaseIterable {
+public enum IconStyle: String, Sendable, CaseIterable {
     case codex
+    case openai
     case claude
     case zai
     case minimax
+    case manus
     case gemini
     case antigravity
     case cursor
@@ -52,12 +77,31 @@ public enum IconStyle: Sendable, CaseIterable {
     case vertexai
     case augment
     case jetbrains
+    case moonshot
     case amp
+    case t3chat
     case ollama
     case synthetic
     case warp
     case openrouter
+    case elevenlabs
+    case windsurf
     case perplexity
+    case mimo
+    case doubao
+    case abacus
+    case mistral
+    case deepseek
+    case codebuff
+    case crof
+    case venice
+    case commandcode
+    case stepfun
+    case bedrock
+    case grok
+    case groq
+    case llmproxy
+    case deepgram
     case combined
 }
 
@@ -78,6 +122,8 @@ public struct ProviderMetadata: Sendable {
     public let browserCookieOrder: BrowserCookieImportOrder?
     public let dashboardURL: String?
     public let subscriptionDashboardURL: String?
+    /// Provider-specific release notes or changelog URL for CLI/provider updates.
+    public let changelogURL: String?
     /// Statuspage.io base URL for incident polling (append /api/v2/status.json).
     public let statusPageURL: String?
     /// Browser-only status link (no API polling); used when statusPageURL is nil.
@@ -102,6 +148,7 @@ public struct ProviderMetadata: Sendable {
         browserCookieOrder: BrowserCookieImportOrder? = nil,
         dashboardURL: String?,
         subscriptionDashboardURL: String? = nil,
+        changelogURL: String? = nil,
         statusPageURL: String?,
         statusLinkURL: String? = nil,
         statusWorkspaceProductID: String? = nil)
@@ -122,6 +169,7 @@ public struct ProviderMetadata: Sendable {
         self.browserCookieOrder = browserCookieOrder
         self.dashboardURL = dashboardURL
         self.subscriptionDashboardURL = subscriptionDashboardURL
+        self.changelogURL = changelogURL
         self.statusPageURL = statusPageURL
         self.statusLinkURL = statusLinkURL
         self.statusWorkspaceProductID = statusWorkspaceProductID
@@ -158,6 +206,16 @@ public enum ProviderBrowserCookieDefaults {
         #if os(macOS)
         let preferredPrefix: [Browser] = [.safari, .chrome, .firefox]
         return preferredPrefix + Browser.defaultImportOrder.filter { !preferredPrefix.contains($0) }
+        #else
+        nil
+        #endif
+    }
+
+    /// Grok is normally signed in through Chrome; keep this narrow so CLI/live probes do not touch
+    /// unrelated browser keychains.
+    public static var grokCookieImportOrder: BrowserCookieImportOrder? {
+        #if os(macOS)
+        [.chrome]
         #else
         nil
         #endif

@@ -5,6 +5,7 @@ ALLOW_LLDB=${CODEXBAR_ALLOW_LLDB:-0}
 SIGNING_MODE=${CODEXBAR_SIGNING:-}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
+LOWER_CONF=$(printf "%s" "$CONF" | tr '[:upper:]' '[:lower:]')
 
 # Load version info
 source "$ROOT/version.env"
@@ -108,8 +109,10 @@ for ARCH in "${ARCH_LIST[@]}"; do
   swift build -c "$CONF" --arch "$ARCH"
 done
 
-APP="$ROOT/CodexBar.app"
-rm -rf "$APP"
+APP_FINAL="$ROOT/CodexBar.app"
+APP_STAGE="$ROOT/.build/package/CodexBar.app"
+rm -rf "$APP_STAGE"
+APP="$APP_STAGE"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 mkdir -p "$APP/Contents/Helpers" "$APP/Contents/PlugIns"
 
@@ -123,7 +126,6 @@ fi
 BUNDLE_ID="com.steipete.codexbar"
 FEED_URL="https://raw.githubusercontent.com/steipete/CodexBar/main/appcast.xml"
 AUTO_CHECKS=true
-LOWER_CONF=$(printf "%s" "$CONF" | tr '[:upper:]' '[:lower:]')
 if [[ "$LOWER_CONF" == "debug" ]]; then
   BUNDLE_ID="com.steipete.codexbar.debug"
   FEED_URL=""
@@ -134,9 +136,10 @@ if [[ "$SIGNING_MODE" == "adhoc" ]]; then
   AUTO_CHECKS=false
 fi
 WIDGET_BUNDLE_ID="${BUNDLE_ID}.widget"
-APP_GROUP_ID="group.com.steipete.codexbar"
+APP_TEAM_ID="${APP_TEAM_ID:-Y5PE65HELJ}"
+APP_GROUP_ID="${APP_TEAM_ID}.com.steipete.codexbar"
 if [[ "$BUNDLE_ID" == *".debug"* ]]; then
-  APP_GROUP_ID="group.com.steipete.codexbar.debug"
+  APP_GROUP_ID="${APP_TEAM_ID}.com.steipete.codexbar.debug"
 fi
 ENTITLEMENTS_DIR="$ROOT/.build/entitlements"
 APP_ENTITLEMENTS="${ENTITLEMENTS_DIR}/CodexBar.entitlements"
@@ -197,6 +200,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>SUEnableAutomaticChecks</key><${AUTO_CHECKS}/>
     <key>CodexBuildTimestamp</key><string>${BUILD_TIMESTAMP}</string>
     <key>CodexGitCommit</key><string>${GIT_COMMIT}</string>
+    <key>CodexBarTeamID</key><string>${APP_TEAM_ID}</string>
 </dict>
 </plist>
 PLIST
@@ -267,6 +271,92 @@ install_binary() {
   verify_binary_arches "$dest" "${ARCH_LIST[@]}"
 }
 
+ensure_widget_extension_project() {
+  local spec="$ROOT/WidgetExtension/project.yml"
+  local project_dir="$ROOT/WidgetExtension/CodexBarWidgetExtension.xcodeproj"
+  if command -v xcodegen >/dev/null 2>&1; then
+    xcodegen generate --spec "$spec" --project "$ROOT/WidgetExtension" --quiet
+  elif [[ ! -f "$project_dir/project.pbxproj" ]]; then
+    echo "ERROR: Missing ${project_dir}; install xcodegen or restore the generated project." >&2
+    exit 1
+  fi
+}
+
+build_widget_extension() {
+  local xcode_conf="Release"
+  if [[ "$LOWER_CONF" == "debug" ]]; then
+    xcode_conf="Debug"
+  fi
+
+  ensure_widget_extension_project
+
+  local derived_dir="$ROOT/.build/xcode-widget-extension-${LOWER_CONF}"
+  local project_dir="$ROOT/WidgetExtension/CodexBarWidgetExtension.xcodeproj"
+  local build_log="$derived_dir/xcodebuild.log"
+  local timeout_seconds="${CODEXBAR_WIDGET_EXTENSION_TIMEOUT_SECONDS:-900}"
+  local archs="${ARCH_LIST[*]}"
+
+  mkdir -p "$derived_dir"
+  echo "Building CodexBarWidget Xcode extension (${xcode_conf}, ${archs})." >&2
+  xcodebuild \
+    -project "$project_dir" \
+    -scheme CodexBarWidgetExtension \
+    -configuration "$xcode_conf" \
+    -destination "generic/platform=macOS" \
+    -derivedDataPath "$derived_dir" \
+    -skipPackageUpdates \
+    -disableAutomaticPackageResolution \
+    -skipMacroValidation \
+    -skipPackagePluginValidation \
+    CODEXBAR_WIDGET_BUNDLE_ID="$WIDGET_BUNDLE_ID" \
+    CODEXBAR_TEAM_ID="$APP_TEAM_ID" \
+    MARKETING_VERSION="$MARKETING_VERSION" \
+    CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+    CODE_SIGNING_ALLOWED=NO \
+    ARCHS="$archs" \
+    ONLY_ACTIVE_ARCH=NO \
+    build >"$build_log" 2>&1 &
+
+  local xcodebuild_pid=$!
+  local elapsed=0
+  while kill -0 "$xcodebuild_pid" 2>/dev/null; do
+    if [[ "$elapsed" -ge "$timeout_seconds" ]]; then
+      kill "$xcodebuild_pid" 2>/dev/null || true
+      wait "$xcodebuild_pid" 2>/dev/null || true
+      tail -80 "$build_log" >&2 || true
+      echo "ERROR: Timed out building CodexBarWidget extension after ${timeout_seconds}s" >&2
+      exit 1
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+    if (( elapsed > 0 && elapsed % 60 == 0 )); then
+      echo "Still building CodexBarWidget extension (${elapsed}s)..." >&2
+    fi
+  done
+  if ! wait "$xcodebuild_pid"; then
+    tail -120 "$build_log" >&2 || true
+    echo "ERROR: Failed to build CodexBarWidget extension" >&2
+    exit 1
+  fi
+
+  local appex="$derived_dir/Build/Products/${xcode_conf}/CodexBarWidget.appex"
+  if [[ ! -f "$appex/Contents/MacOS/CodexBarWidget" ]]; then
+    echo "ERROR: Missing Xcode-built CodexBarWidget.appex at ${appex}" >&2
+    exit 1
+  fi
+  echo "$appex"
+}
+
+install_widget_extension() {
+  local src_appex
+  src_appex="$(build_widget_extension)"
+  local widget_app="$APP/Contents/PlugIns/CodexBarWidget.appex"
+  rm -rf "$widget_app"
+  mkdir -p "$APP/Contents/PlugIns"
+  cp -R "$src_appex" "$widget_app"
+  verify_binary_arches "$widget_app/Contents/MacOS/CodexBarWidget" "${ARCH_LIST[@]}"
+}
+
 install_binary "CodexBar" "$APP/Contents/MacOS/CodexBar"
 # Ship CodexBarCLI alongside the app for easy symlinking.
 if [[ -n "$(resolve_binary_path "CodexBarCLI" "${ARCH_LIST[0]}")" ]]; then
@@ -276,32 +366,7 @@ fi
 if [[ -n "$(resolve_binary_path "CodexBarClaudeWatchdog" "${ARCH_LIST[0]}")" ]]; then
   install_binary "CodexBarClaudeWatchdog" "$APP/Contents/Helpers/CodexBarClaudeWatchdog"
 fi
-if [[ -n "$(resolve_binary_path "CodexBarWidget" "${ARCH_LIST[0]}")" ]]; then
-  WIDGET_APP="$APP/Contents/PlugIns/CodexBarWidget.appex"
-  mkdir -p "$WIDGET_APP/Contents/MacOS" "$WIDGET_APP/Contents/Resources"
-  cat > "$WIDGET_APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key><string>CodexBarWidget</string>
-    <key>CFBundleDisplayName</key><string>CodexBar</string>
-    <key>CFBundleIdentifier</key><string>${WIDGET_BUNDLE_ID}</string>
-    <key>CFBundleExecutable</key><string>CodexBarWidget</string>
-    <key>CFBundlePackageType</key><string>XPC!</string>
-    <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION}</string>
-    <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <key>NSExtension</key>
-    <dict>
-        <key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
-        <key>NSExtensionPrincipalClass</key><string>CodexBarWidget.CodexBarWidgetBundle</string>
-    </dict>
-</dict>
-</plist>
-PLIST
-  install_binary "CodexBarWidget" "$WIDGET_APP/Contents/MacOS/CodexBarWidget"
-fi
+install_widget_extension
 # Embed Sparkle.framework
 if [[ -d ".build/$CONF/Sparkle.framework" ]]; then
   cp -R ".build/$CONF/Sparkle.framework" "$APP/Contents/Frameworks/"
@@ -396,4 +461,7 @@ codesign "${CODESIGN_ARGS[@]}" \
   --entitlements "$APP_ENTITLEMENTS" \
   "$APP"
 
+rm -rf "$APP_FINAL"
+mv "$APP" "$APP_FINAL"
+APP="$APP_FINAL"
 echo "Created $APP"

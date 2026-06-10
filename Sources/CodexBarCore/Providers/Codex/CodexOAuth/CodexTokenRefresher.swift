@@ -49,25 +49,10 @@ public enum CodexTokenRefresher {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw RefreshError.invalidResponse("No HTTP response")
-            }
-
-            if http.statusCode == 401 {
-                if let errorCode = Self.extractErrorCode(from: data) {
-                    switch errorCode.lowercased() {
-                    case "refresh_token_expired": throw RefreshError.expired
-                    case "refresh_token_reused": throw RefreshError.reused
-                    case "refresh_token_invalidated": throw RefreshError.revoked
-                    default: throw RefreshError.expired
-                    }
-                }
-                throw RefreshError.expired
-            }
-
-            guard http.statusCode == 200 else {
-                throw RefreshError.invalidResponse("Status \(http.statusCode)")
+            let response = try await ProviderHTTPClient.shared.response(for: request)
+            let data = response.data
+            guard response.statusCode == 200 else {
+                throw Self.refreshFailureError(statusCode: response.statusCode, data: data)
             }
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -97,4 +82,33 @@ public enum CodexTokenRefresher {
         if let error = json["error"] as? String { return error }
         return json["code"] as? String
     }
+
+    private static func refreshFailureError(statusCode: Int, data: Data) -> RefreshError {
+        if let errorCode = extractErrorCode(from: data) {
+            switch errorCode.lowercased() {
+            case "refresh_token_expired":
+                return .expired
+            case "refresh_token_reused":
+                return .reused
+            case "invalid_grant", "refresh_token_invalidated":
+                return .revoked
+            default:
+                break
+            }
+        }
+
+        if statusCode == 401 {
+            return .expired
+        }
+
+        return .invalidResponse("Status \(statusCode)")
+    }
 }
+
+#if DEBUG
+extension CodexTokenRefresher {
+    static func _refreshFailureErrorForTesting(statusCode: Int, data: Data) -> RefreshError {
+        self.refreshFailureError(statusCode: statusCode, data: data)
+    }
+}
+#endif

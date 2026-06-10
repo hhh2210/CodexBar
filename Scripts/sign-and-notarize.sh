@@ -6,32 +6,30 @@ APP_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)"
 APP_BUNDLE="CodexBar.app"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 source "$ROOT/version.env"
-ZIP_NAME="${APP_NAME}-${MARKETING_VERSION}.zip"
-DSYM_ZIP="${APP_NAME}-${MARKETING_VERSION}.dSYM.zip"
+source "$ROOT/Scripts/release_artifacts.sh"
+
+# Allow building a universal binary if ARCHES is provided; default to universal (arm64 + x86_64).
+ARCHES_VALUE=${ARCHES:-"arm64 x86_64"}
+ZIP_NAME=$(codexbar_app_zip_name "$MARKETING_VERSION" "$ARCHES_VALUE")
+DSYM_ZIP=$(codexbar_dsym_zip_name "$MARKETING_VERSION" "$ARCHES_VALUE")
 
 if [[ -z "${APP_STORE_CONNECT_API_KEY_P8:-}" || -z "${APP_STORE_CONNECT_KEY_ID:-}" || -z "${APP_STORE_CONNECT_ISSUER_ID:-}" ]]; then
   echo "Missing APP_STORE_CONNECT_* env vars (API key, key id, issuer id)." >&2
   exit 1
 fi
-if [[ -z "${SPARKLE_PRIVATE_KEY_FILE:-}" ]]; then
-  echo "SPARKLE_PRIVATE_KEY_FILE is required for release signing/verification." >&2
-  exit 1
-fi
-if [[ ! -f "$SPARKLE_PRIVATE_KEY_FILE" ]]; then
-  echo "Sparkle key file not found: $SPARKLE_PRIVATE_KEY_FILE" >&2
-  exit 1
-fi
-key_lines=$(grep -v '^[[:space:]]*#' "$SPARKLE_PRIVATE_KEY_FILE" | sed '/^[[:space:]]*$/d')
-if [[ $(printf "%s\n" "$key_lines" | wc -l) -ne 1 ]]; then
-  echo "Sparkle key file must contain exactly one base64 line (no comments/blank lines)." >&2
-  exit 1
-fi
 
-echo "$APP_STORE_CONNECT_API_KEY_P8" | sed 's/\\n/\n/g' > /tmp/codexbar-api-key.p8
-trap 'rm -f /tmp/codexbar-api-key.p8 /tmp/${APP_NAME}Notarize.zip' EXIT
+NOTARIZATION_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/codexbar-notarize.XXXXXX")
+chmod 700 "$NOTARIZATION_TEMP_DIR"
+API_KEY_PATH="$NOTARIZATION_TEMP_DIR/codexbar-api-key.p8"
+NOTARIZATION_ZIP="$NOTARIZATION_TEMP_DIR/${APP_NAME}Notarize.zip"
+trap 'rm -rf "$NOTARIZATION_TEMP_DIR"' EXIT
 
-# Allow building a universal binary if ARCHES is provided; default to universal (arm64 + x86_64).
-ARCHES_VALUE=${ARCHES:-"arm64 x86_64"}
+(
+  umask 077
+  printf '%s' "$APP_STORE_CONNECT_API_KEY_P8" | sed 's/\\n/\n/g' > "$API_KEY_PATH"
+)
+chmod 600 "$API_KEY_PATH"
+
 ARCH_LIST=( ${ARCHES_VALUE} )
 for ARCH in "${ARCH_LIST[@]}"; do
   swift build -c release --arch "$ARCH"
@@ -64,11 +62,11 @@ codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" \
   "$APP_BUNDLE"
 
 DITTO_BIN=${DITTO_BIN:-/usr/bin/ditto}
-"$DITTO_BIN" --norsrc -c -k --keepParent "$APP_BUNDLE" "/tmp/${APP_NAME}Notarize.zip"
+"$DITTO_BIN" --norsrc -c -k --keepParent "$APP_BUNDLE" "$NOTARIZATION_ZIP"
 
 echo "Submitting for notarization"
-xcrun notarytool submit "/tmp/${APP_NAME}Notarize.zip" \
-  --key /tmp/codexbar-api-key.p8 \
+xcrun notarytool submit "$NOTARIZATION_ZIP" \
+  --key "$API_KEY_PATH" \
   --key-id "$APP_STORE_CONNECT_KEY_ID" \
   --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
   --wait
@@ -94,8 +92,10 @@ if [[ ! -d "$DSYM_PATH" ]]; then
   exit 1
 fi
 if [[ ${#ARCH_LIST[@]} -gt 1 ]]; then
-  MERGED_DSYM="${PREFERRED_ARCH_DIR}/${APP_NAME}.dSYM-universal"
-  rm -rf "$MERGED_DSYM"
+  MERGED_DSYM_ROOT="${PREFERRED_ARCH_DIR}/${APP_NAME}.dSYM-universal"
+  MERGED_DSYM="${MERGED_DSYM_ROOT}/${APP_NAME}.dSYM"
+  rm -rf "$MERGED_DSYM_ROOT"
+  mkdir -p "$MERGED_DSYM_ROOT"
   cp -R "$DSYM_PATH" "$MERGED_DSYM"
   DWARF_PATH="${MERGED_DSYM}/Contents/Resources/DWARF/${APP_NAME}"
   BINARIES=()

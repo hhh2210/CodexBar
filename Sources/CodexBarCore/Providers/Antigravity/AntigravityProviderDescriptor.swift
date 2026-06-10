@@ -33,11 +33,27 @@ public enum AntigravityProviderDescriptor {
                 supportsTokenCost: false,
                 noDataMessage: { "Antigravity cost summary is not supported." }),
             fetchPlan: ProviderFetchPlan(
-                sourceModes: [.auto, .cli],
-                pipeline: ProviderFetchPipeline(resolveStrategies: { _ in [AntigravityStatusFetchStrategy()] })),
+                sourceModes: [.auto, .cli, .oauth],
+                pipeline: ProviderFetchPipeline(resolveStrategies: self.resolveStrategies)),
             cli: ProviderCLIConfig(
                 name: "antigravity",
                 versionDetector: nil))
+    }
+
+    private static func resolveStrategies(context: ProviderFetchContext) async -> [any ProviderFetchStrategy] {
+        let local = AntigravityStatusFetchStrategy()
+        let oauth = AntigravityOAuthFetchStrategy()
+
+        switch context.sourceMode {
+        case .cli:
+            return [local]
+        case .oauth:
+            return [oauth]
+        case .auto:
+            return [local, oauth]
+        case .web, .api:
+            return []
+        }
     }
 }
 
@@ -56,6 +72,51 @@ struct AntigravityStatusFetchStrategy: ProviderFetchStrategy {
         return self.makeResult(
             usage: usage,
             sourceLabel: "local")
+    }
+
+    func shouldFallback(on _: Error, context: ProviderFetchContext) -> Bool {
+        context.sourceMode == .auto
+    }
+}
+
+struct AntigravityOAuthFetchStrategy: ProviderFetchStrategy {
+    let id: String = "antigravity.oauth"
+    let kind: ProviderFetchKind = .oauth
+
+    func isAvailable(_: ProviderFetchContext) async -> Bool {
+        true
+    }
+
+    func fetch(_ context: ProviderFetchContext) async throws -> ProviderFetchResult {
+        let fetcher = AntigravityRemoteUsageFetcher(
+            environment: context.env,
+            credentialsUpdateHandler: { credentials in
+                guard let accountID = context.selectedTokenAccountID,
+                      let updater = context.tokenAccountTokenUpdater
+                else {
+                    return
+                }
+                let token = try AntigravityOAuthCredentialsStore.tokenAccountValue(for: credentials)
+                await updater(.antigravity, accountID, token)
+            })
+        let snapshot = try await fetcher.fetch()
+        let usage = if snapshot.modelQuotas.isEmpty {
+            UsageSnapshot(
+                primary: nil,
+                secondary: nil,
+                tertiary: nil,
+                updatedAt: Date(),
+                identity: ProviderIdentitySnapshot(
+                    providerID: .antigravity,
+                    accountEmail: snapshot.accountEmail,
+                    accountOrganization: nil,
+                    loginMethod: snapshot.accountPlan))
+        } else {
+            try snapshot.toUsageSnapshot()
+        }
+        return self.makeResult(
+            usage: usage,
+            sourceLabel: "oauth")
     }
 
     func shouldFallback(on _: Error, context _: ProviderFetchContext) -> Bool {

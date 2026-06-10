@@ -151,6 +151,81 @@ struct CostUsageScannerTests {
     }
 
     @Test
+    func `claude report preserves per-request threshold pricing`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 5, day: 9)
+        let first = env.isoString(for: day)
+        let second = env.isoString(for: day.addingTimeInterval(1))
+        let model = "claude-sonnet-4-6"
+        let firstEntry: [String: Any] = [
+            "type": "assistant",
+            "timestamp": first,
+            "requestId": "req_one",
+            "message": [
+                "id": "msg_one",
+                "model": model,
+                "usage": [
+                    "input_tokens": 150_000,
+                    "output_tokens": 0,
+                ],
+            ],
+        ]
+        let secondEntry: [String: Any] = [
+            "type": "assistant",
+            "timestamp": second,
+            "requestId": "req_two",
+            "message": [
+                "id": "msg_two",
+                "model": model,
+                "usage": [
+                    "input_tokens": 150_000,
+                    "output_tokens": 0,
+                ],
+            ],
+        ]
+
+        _ = try env.writeClaudeProjectFile(
+            relativePath: "project-a/threshold.jsonl",
+            contents: env.jsonl([firstEntry, secondEntry]))
+
+        var options = CostUsageScanner.Options(
+            codexSessionsRoot: nil,
+            claudeProjectsRoots: [env.claudeProjectsRoot],
+            cacheRoot: env.cacheRoot)
+        options.refreshMinIntervalSeconds = 0
+
+        let report = CostUsageScanner.loadDailyReport(
+            provider: .claude,
+            since: day,
+            until: day,
+            now: day,
+            options: options)
+        let expectedRequestCost = CostUsagePricing.claudeCostUSD(
+            model: model,
+            inputTokens: 150_000,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 0,
+            modelsDevCacheRoot: env.cacheRoot) ?? 0
+        let aggregateCost = CostUsagePricing.claudeCostUSD(
+            model: model,
+            inputTokens: 300_000,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 0,
+            modelsDevCacheRoot: env.cacheRoot) ?? 0
+        let expectedCost = expectedRequestCost * 2
+
+        #expect(report.data.count == 1)
+        #expect(report.data.first?.inputTokens == 300_000)
+        #expect(abs((report.data.first?.costUSD ?? 0) - expectedCost) < 0.000001)
+        #expect(abs((report.data.first?.costUSD ?? 0) - aggregateCost) > 0.000001)
+        #expect(abs((report.data.first?.modelBreakdowns?.first?.costUSD ?? 0) - expectedCost) < 0.000001)
+    }
+
+    @Test
     func `claude parses large lines with usage at tail`() throws {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }
@@ -338,6 +413,117 @@ struct CostUsageScannerTests {
         #expect(packed[0] == 60)
         #expect(packed[1] == 20)
         #expect(packed[2] == 6)
+    }
+
+    @Test
+    func `codex incremental parsing keeps current turn id`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 5, day: 10)
+        let iso0 = env.isoString(for: day)
+        let iso1 = env.isoString(for: day.addingTimeInterval(1))
+        let iso2 = env.isoString(for: day.addingTimeInterval(2))
+        let iso3 = env.isoString(for: day.addingTimeInterval(3))
+
+        let model = "openai/gpt-5.5"
+        let turnID = "22222222-2222-2222-2222-222222222222"
+        let turnContext: [String: Any] = [
+            "type": "turn_context",
+            "timestamp": iso0,
+            "payload": [
+                "model": model,
+            ],
+        ]
+        let taskStarted: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso1,
+            "payload": [
+                "type": "task_started",
+                "id": turnID,
+            ],
+        ]
+        let firstTokenCount: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso2,
+            "payload": [
+                "type": "token_count",
+                "info": [
+                    "total_token_usage": [
+                        "input_tokens": 100,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                    ],
+                ],
+            ],
+        ]
+
+        let fileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "priority-session.jsonl",
+            contents: env.jsonl([turnContext, taskStarted, firstTokenCount]))
+        let range = CostUsageScanner.CostUsageDayRange(since: day, until: day)
+
+        let first = CostUsageScanner.parseCodexFile(fileURL: fileURL, range: range)
+        #expect(first.lastCodexTurnID == turnID)
+        #expect(first.rows.map(\.turnID) == [turnID])
+
+        let secondTokenCount: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso3,
+            "payload": [
+                "type": "token_count",
+                "info": [
+                    "total_token_usage": [
+                        "input_tokens": 160,
+                        "cached_input_tokens": 40,
+                        "output_tokens": 16,
+                    ],
+                ],
+            ],
+        ]
+        try env.jsonl([turnContext, taskStarted, firstTokenCount, secondTokenCount])
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let delta = CostUsageScanner.parseCodexFile(
+            fileURL: fileURL,
+            range: range,
+            startOffset: first.parsedBytes,
+            initialModel: first.lastModel,
+            initialTotals: first.lastTotals,
+            initialCodexTurnID: first.lastCodexTurnID)
+
+        #expect(delta.lastCodexTurnID == turnID)
+        #expect(delta.rows.map(\.turnID) == [turnID])
+        #expect(delta.rows.first?.input == 60)
+        #expect(delta.rows.first?.cached == 20)
+        #expect(delta.rows.first?.output == 6)
+    }
+
+    @Test
+    func `codex fast parser does not trap on overflowing token integers`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 5, day: 10)
+        let iso = env.isoString(for: day)
+        let hugeInteger = String(repeating: "9", count: 100)
+        let line = """
+        {"type":"event_msg","timestamp":"\(
+            iso)","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":\(
+            hugeInteger),"cached_input_tokens":0,"output_tokens":5},"model":"openai/gpt-5.5"}}}
+        """
+        let fileURL = try env.writeCodexSessionFile(day: day, filename: "overflow.jsonl", contents: line + "\n")
+        let range = CostUsageScanner.CostUsageDayRange(since: day, until: day)
+
+        let parsed = CostUsageScanner.parseCodexFile(fileURL: fileURL, range: range)
+        let dayKey = CostUsageScanner.CostUsageDayRange.dayKey(from: day)
+        let packed = parsed.days[dayKey]?["gpt-5.5"] ?? []
+
+        #expect(packed.count >= 3)
+        #expect(packed[0] == 0)
+        #expect(packed[1] == 0)
+        #expect(packed[2] == 5)
     }
 
     @Test

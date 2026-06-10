@@ -288,7 +288,7 @@ struct StatusProbeTests {
     }
 
     @Test
-    func `parse claude status loading panel does not report zero percent`() {
+    func `parse claude status loading panel surfaces loading stall`() {
         let sample = """
         Claude Code v2.1.29
         22:47 |  | Opus 4.5 | default | ░░░░░░░░░░ 0%  ◯ /ide for Visual Studio Code
@@ -301,10 +301,38 @@ struct StatusProbeTests {
         do {
             _ = try ClaudeStatusProbe.parse(text: sample)
             #expect(Bool(false), "Parsing should fail while /usage is still loading")
-        } catch ClaudeStatusProbeError.parseFailed {
+        } catch let ClaudeStatusProbeError.parseFailed(message) {
+            #expect(message.lowercased().contains("loading"))
             return
         } catch ClaudeStatusProbeError.timedOut {
             return
+        } catch {
+            #expect(Bool(false), "Unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func `parse claude retained usage panel classifies latest loading panel`() {
+        let sample = """
+        Settings:  Status   Config   Usage  (tab to cycle)
+        Current session
+        ███████▌15%used
+        Resets 11:30pm (Asia/Calcutta)
+
+        Current week (all models)
+        █▌ 3% used
+        Resets Feb 12 at 1:30pm (Asia/Calcutta)
+
+        Settings:  Status   Config   Usage  (tab to cycle)
+        Loading usage data…
+        Esc to cancel
+        """
+
+        do {
+            _ = try ClaudeStatusProbe.parse(text: sample)
+            #expect(Bool(false), "Parsing should fail while the latest /usage panel is still loading")
+        } catch let ClaudeStatusProbeError.parseFailed(message) {
+            #expect(message.lowercased().contains("loading"))
         } catch {
             #expect(Bool(false), "Unexpected error: \(error)")
         }
@@ -489,6 +517,77 @@ struct StatusProbeTests {
             #expect(lower.contains("auto-accept"))
         } catch {
             #expect(Bool(false), "Unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func `surfaces claude subscription notice without quota data`() {
+        let sample = """
+        You are currently using your subscription to power your Claude Code usage
+        """
+
+        do {
+            _ = try ClaudeStatusProbe.parse(text: sample)
+            #expect(Bool(false), "Parsing should fail for subscription notice without quota data")
+        } catch let ClaudeStatusProbeError.parseFailed(message) {
+            let lower = message.lowercased()
+            #expect(lower.contains("subscription"))
+            #expect(!lower.contains("still loading"))
+        } catch {
+            #expect(Bool(false), "Unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func `parse claude status subscription notice is distinct from loading stall`() {
+        let subscriptionOnly = "You are currently using your subscription to power your Claude Code usage"
+        let loadingOnly = """
+        Settings:  Status   Config   Usage  (tab to cycle)
+        Loading usage data…
+        Esc to cancel
+        """
+
+        do {
+            _ = try ClaudeStatusProbe.parse(text: subscriptionOnly)
+            #expect(Bool(false), "Subscription notice should fail parsing")
+        } catch let ClaudeStatusProbeError.parseFailed(subMessage) {
+            #expect(!subMessage.lowercased().contains("still loading"))
+        } catch {
+            #expect(Bool(false), "Unexpected error for subscription: \(error)")
+        }
+
+        do {
+            _ = try ClaudeStatusProbe.parse(text: loadingOnly)
+            #expect(Bool(false), "Loading panel should fail parsing")
+        } catch let ClaudeStatusProbeError.parseFailed(loadMessage) {
+            #expect(loadMessage.lowercased().contains("loading"))
+        } catch {
+            #expect(Bool(false), "Unexpected error for loading: \(error)")
+        }
+    }
+
+    @Test
+    func `parse claude status mixed loading and subscription notice surfaces subscription error`() {
+        // PTY capture containing both an intermediate "Loading usage data…" panel and the final
+        // Claude CLI 2.1.148 subscription notice. The subscription error must be surfaced, not
+        // the still-loading stall, so the UI shows the precise subscription message.
+        let mixedCapture = """
+        Settings:  Status   Config   Usage  (tab to cycle)
+        Loading usage data…
+        Esc to cancel
+
+        You are currently using your subscription to power your Claude Code usage
+        """
+
+        do {
+            _ = try ClaudeStatusProbe.parse(text: mixedCapture)
+            #expect(Bool(false), "Parsing should fail for mixed loading+subscription capture")
+        } catch let ClaudeStatusProbeError.parseFailed(message) {
+            let lower = message.lowercased()
+            #expect(lower.contains("subscription"))
+            #expect(!lower.contains("still loading"))
+        } catch {
+            #expect(Bool(false), "Unexpected error for mixed capture: \(error)")
         }
     }
 

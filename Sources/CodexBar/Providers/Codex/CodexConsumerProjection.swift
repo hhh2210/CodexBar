@@ -2,6 +2,9 @@ import CodexBarCore
 import Foundation
 
 struct CodexUIErrorMapper {
+    private static let codexCLINotSignedInMessage =
+        "Codex CLI is not signed in. Run `codex login --device-auth`, then refresh."
+
     static func userFacingMessage(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16,12 +19,29 @@ struct CodexUIErrorMapper {
             return cachedMessage
         }
 
+        if self.looksCodexCLIMissing(lower: lower) {
+            return CodexStatusProbeError.codexNotInstalled.localizedDescription
+        }
+
+        if self.looksCodexCLILoginRequired(lower: lower) {
+            return self.codexCLINotSignedInMessage
+        }
+
         if self.looksExpired(lower: lower) {
             return "Codex session expired. Sign in again."
         }
 
         if lower.contains("frame load interrupted") {
             return "OpenAI web refresh was interrupted. Refresh OpenAI cookies and try again."
+        }
+
+        if self.looksOpenAIWebTimeout(lower: lower) {
+            return "OpenAI web refresh timed out. Refresh OpenAI cookies and try again."
+        }
+
+        if self.looksOpenAIWebNetworkError(lower: lower) {
+            return "OpenAI web refresh hit a network error. "
+                + "Check your connection, then refresh OpenAI cookies and try again."
         }
 
         if self.looksInternalTransport(lower: lower) {
@@ -59,8 +79,28 @@ struct CodexUIErrorMapper {
             || lower.contains("selected managed codex account is unavailable")
             || lower.contains("codex credits are still loading")
             || lower.contains("codex account changed; importing browser cookies")
+            || lower.contains("codex cli is not signed in.")
             || lower.contains("codex session expired. sign in again.")
+            || lower.contains("openai web refresh timed out. refresh openai cookies and try again.")
+            || lower.contains(
+                "openai web refresh hit a network error. "
+                    + "check your connection, then refresh openai cookies and try again.")
             || lower.contains("codex usage is temporarily unavailable. try refreshing.")
+    }
+
+    private static func looksCodexCLIMissing(lower: String) -> Bool {
+        lower.contains("codex cli missing")
+            || lower.contains("codex cli not found")
+            || lower.contains("missing cli codex")
+            || lower.contains("missing cli 'codex'")
+            || lower.contains("missing cli \"codex\"")
+            || (lower.contains("binary not found") && lower.contains("codex"))
+    }
+
+    private static func looksCodexCLILoginRequired(lower: String) -> Bool {
+        lower.contains("codex account authentication required")
+            || lower.contains("account authentication required to read rate limits")
+            || lower.contains("requiresopenaiauth")
     }
 
     private static func looksExpired(lower: String) -> Bool {
@@ -83,6 +123,15 @@ struct CodexUIErrorMapper {
             || lower.contains("get https://")
             || lower.contains("get http://")
             || lower.contains("returned invalid data")
+    }
+
+    private static func looksOpenAIWebTimeout(lower: String) -> Bool {
+        lower.contains("nsurlerrordomain")
+            && (lower.contains("timed out") || lower.contains("error -1001"))
+    }
+
+    private static func looksOpenAIWebNetworkError(lower: String) -> Bool {
+        lower.contains("nsurlerrordomain")
     }
 }
 
@@ -194,10 +243,12 @@ struct CodexConsumerProjection {
             []
         }
 
+        let displayableUsageBreakdown = OpenAIDashboardDailyBreakdown.removingSkillUsageServices(
+            from: dashboard?.usageBreakdown ?? [])
         let canShowBuyCredits = surface == .liveCard
         let hasUsageBreakdown = surface == .liveCard
             && dashboardVisibility == .attached
-            && !(dashboard?.usageBreakdown ?? []).isEmpty
+            && !displayableUsageBreakdown.isEmpty
         let hasCreditsHistory = surface == .liveCard
             && dashboardVisibility == .attached
             && !(dashboard?.dailyBreakdown ?? []).isEmpty
@@ -356,9 +407,11 @@ extension UsageStore {
         errorOverride: String? = nil,
         now: Date = Date()) -> CodexConsumerProjection
     {
+        let snapshot = surface == .overrideCard ? snapshotOverride : snapshotOverride ?? self.snapshots[.codex]
+        let rawUsageError = surface == .overrideCard ? errorOverride : errorOverride ?? self.errors[.codex]
         let context = CodexConsumerProjection.Context(
-            snapshot: snapshotOverride ?? self.snapshots[.codex],
-            rawUsageError: errorOverride ?? self.errors[.codex],
+            snapshot: snapshot,
+            rawUsageError: rawUsageError,
             liveCredits: self.credits,
             rawCreditsError: self.lastCreditsError,
             liveDashboard: self.openAIDashboard,

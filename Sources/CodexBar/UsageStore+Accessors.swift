@@ -35,9 +35,42 @@ extension UsageStore {
     }
 
     func userFacingError(for provider: UsageProvider) -> String? {
-        let raw = self.errors[provider]
-        guard provider == .codex else { return raw }
-        return CodexUIErrorMapper.userFacingMessage(raw)
+        if let raw = self.errors[provider] {
+            guard provider == .codex else { return raw }
+            return CodexUIErrorMapper.userFacingMessage(raw)
+        }
+        return self.unavailableMessage(for: provider)
+    }
+
+    func unavailableMessage(for provider: UsageProvider) -> String? {
+        guard self.enabledProvidersForDisplay().contains(provider),
+              !self.isProviderAvailable(provider)
+        else {
+            return nil
+        }
+
+        switch provider {
+        case .synthetic:
+            return SyntheticSettingsError.missingToken.errorDescription
+        case .zai:
+            return ZaiSettingsError.missingToken.errorDescription
+        case .openrouter:
+            return OpenRouterSettingsError.missingToken.errorDescription
+        case .azureopenai:
+            return AzureOpenAISettingsError.missingAPIKey.errorDescription
+        case .elevenlabs:
+            return ElevenLabsUsageError.missingCredentials.errorDescription
+        case .deepseek:
+            return DeepSeekUsageError.missingCredentials.errorDescription
+        case .perplexity:
+            return PerplexityAPIError.missingToken.errorDescription
+        case .minimax:
+            return MiniMaxAPISettingsError.missingToken.errorDescription
+        case .kimi:
+            return KimiAPIError.missingToken.errorDescription
+        default:
+            return "\(self.metadata(for: provider).displayName) is unavailable in the current environment."
+        }
     }
 
     func status(for provider: UsageProvider) -> ProviderStatus? {
@@ -50,15 +83,30 @@ extension UsageStore {
     }
 
     func accountInfo(for provider: UsageProvider) -> AccountInfo {
-        guard provider == .codex else {
-            return self.codexFetcher.loadAccountInfo()
+        let now = Date()
+        let configRevision = self.settings.configRevision
+        if let cached = self.accountInfoCache[provider],
+           cached.isValid(now: now, configRevision: configRevision)
+        {
+            return cached.account
         }
-        let env = ProviderRegistry.makeEnvironment(
-            base: ProcessInfo.processInfo.environment,
-            provider: .codex,
-            settings: self.settings,
-            tokenOverride: nil)
-        let fetcher = ProviderRegistry.makeFetcher(base: self.codexFetcher, provider: .codex, env: env)
-        return fetcher.loadAccountInfo()
+
+        let account: AccountInfo
+        if provider == .codex {
+            let env = ProviderRegistry.makeEnvironment(
+                base: self.environmentBase,
+                provider: .codex,
+                settings: self.settings,
+                tokenOverride: nil)
+            let fetcher = ProviderRegistry.makeFetcher(base: self.codexFetcher, provider: .codex, env: env)
+            account = fetcher.loadAccountInfo()
+        } else {
+            account = self.codexFetcher.loadAccountInfo()
+        }
+        self.accountInfoCache[provider] = AccountInfoCacheEntry(
+            account: account,
+            configRevision: configRevision,
+            expiresAt: now.addingTimeInterval(self.accountInfoCacheTTL))
+        return account
     }
 }

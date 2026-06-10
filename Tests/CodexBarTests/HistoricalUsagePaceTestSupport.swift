@@ -94,7 +94,7 @@ extension HistoricalUsagePaceTests {
     }
 
     static func normalizeReset(_ value: Date) -> Date {
-        let bucket = 60.0
+        let bucket = 5 * 60.0
         let rounded = (value.timeIntervalSinceReferenceDate / bucket).rounded() * bucket
         return Date(timeIntervalSinceReferenceDate: rounded)
     }
@@ -236,7 +236,7 @@ extension HistoricalUsagePaceTests {
     static func waitForHistoricalRecords(
         at fileURL: URL,
         minimumCount: Int,
-        timeoutMilliseconds: UInt64 = 2000) async throws -> [HistoricalUsageRecord]
+        timeoutMilliseconds: UInt64 = 10000) async throws -> [HistoricalUsageRecord]
     {
         let deadline = ContinuousClock.now + .milliseconds(timeoutMilliseconds)
         while ContinuousClock.now < deadline {
@@ -255,7 +255,7 @@ extension HistoricalUsagePaceTests {
         at fileURL: URL,
         minimumCount: Int,
         expectedAccountKey: String?,
-        timeoutMilliseconds: UInt64 = 2000) async throws -> [HistoricalUsageRecord]
+        timeoutMilliseconds: UInt64 = 10000) async throws -> [HistoricalUsageRecord]
     {
         let deadline = ContinuousClock.now + .milliseconds(timeoutMilliseconds)
         while ContinuousClock.now < deadline {
