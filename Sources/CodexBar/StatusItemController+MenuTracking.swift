@@ -275,6 +275,15 @@ extension StatusItemController {
         guard self.isHostedSubviewMenu(menu) || !self.hasOpenHostedSubviewMenu() else { return }
         self.populateMenu(menu, provider: provider)
         self.markMenuFresh(menu)
+        if !self.isHostedSubviewMenu(menu) {
+            // Two-phase opens skip the root-open baseline resync in `menuWillOpen` because the menu
+            // is still marked stale there. Re-anchor after the deferred rebuild actually renders
+            // current store data; otherwise an open-menu store change that reverts to the pre-rebuild
+            // signature would compare equal against the stale baseline and skip a needed refresh
+            // (see `resyncMenuAdjunctReadinessBaseline`). Safe for the mid-open invalidation path,
+            // which already advanced the baseline when the observation was handled.
+            self.resyncMenuAdjunctReadinessBaseline()
+        }
         self.applyIcon(phase: nil)
         #if DEBUG
         self._test_openMenuRebuildObserver?(menu)
