@@ -591,10 +591,17 @@ final class UsageStore {
             lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled,
             thermalState: ProcessInfo.processInfo.thermalState)
         let candidate = date.addingTimeInterval(TimeInterval(decision.delay.components.seconds))
+        let previousScheduledAt = self.adaptiveRefreshScheduledAt
         guard Self.shouldAdvanceAdaptiveTimer(
-            scheduledAt: self.adaptiveRefreshScheduledAt,
+            scheduledAt: previousScheduledAt,
             candidate: candidate)
         else { return }
+        // Fork-only replay-harness trace (never upstreamed); no-op unless explicitly enabled.
+        AdaptiveRefreshTraceRecording.recordTimerAdvanced(
+            at: date,
+            previousScheduledAt: previousScheduledAt,
+            candidateScheduledAt: candidate,
+            decision: decision)
         self.startTimer(preservingResetBoundaryRefresh: true)
     }
 
@@ -703,6 +710,9 @@ final class UsageStore {
 
             self.persistWidgetSnapshot(reason: "refresh")
         }
+
+        // Fork-only replay-harness trace (never upstreamed); no-op unless explicitly enabled.
+        AdaptiveRefreshTraceRecording.recordRefreshCompleted()
 
         self.scheduleResetBoundaryRefreshIfNeeded(
             normalRefreshInterval: self.normalRefreshIntervalForHeuristics())
