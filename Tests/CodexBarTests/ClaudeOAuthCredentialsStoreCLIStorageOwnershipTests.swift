@@ -528,54 +528,59 @@ struct ClaudeOAuthCredentialsStoreCLIStorageOwnershipTests {
                     .securityCLIExperimental,
                     operation: {
                         await ClaudeOAuthCredentialsStore.withCredentialsURLOverrideForTesting(fileURL) {
-                            await ClaudeOAuthCredentialsStore.withSecurityCLIReadOverrideForTesting(
-                                .data(mcpOAuthOnly))
+                            await ClaudeOAuthCredentialsStore.withClaudeKeychainOverridesForTesting(
+                                data: mcpOAuthOnly,
+                                fingerprint: nil)
                             {
-                                ClaudeOAuthCredentialsStore.invalidateCache()
-                                let cacheKey = KeychainCacheStore.Key.oauth(provider: .claude)
-                                defer { KeychainCacheStore.clear(key: cacheKey) }
+                                await ClaudeOAuthCredentialsStore.withSecurityCLIReadOverrideForTesting(
+                                    .data(mcpOAuthOnly))
+                                {
+                                    ClaudeOAuthCredentialsStore.invalidateCache()
+                                    let cacheKey = KeychainCacheStore.Key.oauth(provider: .claude)
+                                    defer { KeychainCacheStore.clear(key: cacheKey) }
 
-                                let expiredData = self.makeCredentialsData(
-                                    accessToken: "expired-claude-cli-owner",
-                                    expiresAt: Date(timeIntervalSinceNow: -3600),
-                                    refreshToken: "refresh-token")
-                                KeychainCacheStore.store(
-                                    key: cacheKey,
-                                    entry: ClaudeOAuthCredentialsStore.CacheEntry(
-                                        data: expiredData,
-                                        storedAt: Date(),
-                                        owner: .claudeCLI))
+                                    let expiredData = self.makeCredentialsData(
+                                        accessToken: "expired-claude-cli-owner",
+                                        expiresAt: Date(timeIntervalSinceNow: -3600),
+                                        refreshToken: "refresh-token")
+                                    KeychainCacheStore.store(
+                                        key: cacheKey,
+                                        entry: ClaudeOAuthCredentialsStore.CacheEntry(
+                                            data: expiredData,
+                                            storedAt: Date(),
+                                            owner: .claudeCLI))
 
-                                do {
-                                    _ = try await ClaudeOAuthCredentialsStore.loadWithAutoRefresh(
-                                        environment: [:],
-                                        allowKeychainPrompt: false,
-                                        respectKeychainPromptCooldown: true)
-                                    Issue.record("Expected mcpOAuth-only keychain error")
-                                } catch let error as ClaudeOAuthCredentialsError {
-                                    guard case .mcpOAuthOnlyKeychain = error else {
-                                        Issue.record("Expected .mcpOAuthOnlyKeychain, got \(error)")
-                                        return
-                                    }
-                                } catch {
-                                    Issue.record("Expected ClaudeOAuthCredentialsError, got \(error)")
-                                }
-
-                                do {
-                                    _ = try await ProviderInteractionContext.$current.withValue(.userInitiated) {
-                                        try await ClaudeOAuthCredentialsStore.loadWithAutoRefresh(
+                                    do {
+                                        _ = try await ClaudeOAuthCredentialsStore.loadWithAutoRefresh(
                                             environment: [:],
                                             allowKeychainPrompt: false,
                                             respectKeychainPromptCooldown: true)
+                                        Issue.record("Expected mcpOAuth-only keychain error")
+                                    } catch let error as ClaudeOAuthCredentialsError {
+                                        guard case .mcpOAuthOnlyKeychain = error else {
+                                            Issue.record("Expected .mcpOAuthOnlyKeychain, got \(error)")
+                                            return
+                                        }
+                                    } catch {
+                                        Issue.record("Expected ClaudeOAuthCredentialsError, got \(error)")
                                     }
-                                    Issue.record("Expected delegated refresh on explicit user action")
-                                } catch let error as ClaudeOAuthCredentialsError {
-                                    guard case .refreshDelegatedToClaudeCLI = error else {
-                                        Issue.record("Expected .refreshDelegatedToClaudeCLI, got \(error)")
-                                        return
+
+                                    do {
+                                        _ = try await ProviderInteractionContext.$current.withValue(.userInitiated) {
+                                            try await ClaudeOAuthCredentialsStore.loadWithAutoRefresh(
+                                                environment: [:],
+                                                allowKeychainPrompt: false,
+                                                respectKeychainPromptCooldown: true)
+                                        }
+                                        Issue.record("Expected delegated refresh on explicit user action")
+                                    } catch let error as ClaudeOAuthCredentialsError {
+                                        guard case .refreshDelegatedToClaudeCLI = error else {
+                                            Issue.record("Expected .refreshDelegatedToClaudeCLI, got \(error)")
+                                            return
+                                        }
+                                    } catch {
+                                        Issue.record("Expected ClaudeOAuthCredentialsError, got \(error)")
                                     }
-                                } catch {
-                                    Issue.record("Expected ClaudeOAuthCredentialsError, got \(error)")
                                 }
                             }
                         }
