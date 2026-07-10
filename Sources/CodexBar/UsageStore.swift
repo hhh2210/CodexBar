@@ -592,10 +592,17 @@ final class UsageStore {
             thermalState: ProcessInfo.processInfo.thermalState)
         let candidate = date.addingTimeInterval(TimeInterval(decision.delay.components.seconds))
         let previousScheduledAt = self.adaptiveRefreshScheduledAt
-        guard Self.shouldAdvanceAdaptiveTimer(
+        let shouldAdvance = Self.shouldAdvanceAdaptiveTimer(
             scheduledAt: previousScheduledAt,
             candidate: candidate)
-        else { return }
+        AdaptiveRefreshTraceRecording.recordTimerAdvanceEvaluation(
+            at: date,
+            previousScheduledAt: previousScheduledAt,
+            candidateScheduledAt: candidate,
+            decision: decision,
+            accepted: shouldAdvance,
+            refreshInFlight: self.isRefreshing)
+        guard shouldAdvance else { return }
         // Fork-only replay-harness trace (never upstreamed); no-op unless explicitly enabled.
         AdaptiveRefreshTraceRecording.recordTimerAdvanced(
             at: date,

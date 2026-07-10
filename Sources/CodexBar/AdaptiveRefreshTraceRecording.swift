@@ -106,6 +106,26 @@ enum AdaptiveRefreshTraceRecording {
             delaySeconds: TimeInterval(decision.delay.components.seconds)))
     }
 
+    // swiftlint:disable:next function_parameter_count
+    static func recordTimerAdvanceEvaluation(
+        at date: Date,
+        previousScheduledAt: Date?,
+        candidateScheduledAt: Date,
+        decision: AdaptiveRefreshPolicy.Decision,
+        accepted: Bool,
+        refreshInFlight: Bool)
+    {
+        guard self.isEnabled else { return }
+        self.activeWriter.append(.timerAdvanceEvaluated(
+            timestamp: date,
+            previousScheduledAt: previousScheduledAt,
+            candidateScheduledAt: candidateScheduledAt,
+            reason: decision.reason.rawValue,
+            delaySeconds: TimeInterval(decision.delay.components.seconds),
+            accepted: accepted,
+            refreshInFlight: refreshInFlight))
+    }
+
     private static func replayThermalState(for state: ProcessInfo.ThermalState) -> ReplayThermalState {
         switch state {
         case .nominal: .nominal
