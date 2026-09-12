@@ -701,8 +701,10 @@ extension UsageStore {
             } else {
                 self.lastKnownResetSnapshots[provider.instanceID]
             }
+            // Resolve display-only allowances after any suspended request has completed.
+            let allowanceCurrent = self.resolvingCurrentCopilotAllowance(in: accountScoped, provider: provider)
             let backfilled = self.preparePublishedSnapshot(
-                accountScoped, provider: provider, resetBackfillSource: resetBackfillSource, context: context)
+                allowanceCurrent, provider: provider, resetBackfillSource: resetBackfillSource, context: context)
             let warningAccountDiscriminator = Self.warningAccountDiscriminator(
                 provider: provider,
                 tokenAccount: currentTokenAccount,

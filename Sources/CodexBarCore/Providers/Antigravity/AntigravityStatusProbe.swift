@@ -55,13 +55,6 @@ private enum AntigravityUsagePool: Hashable {
         case .claudeGPT: "Claude and GPT models"
         }
     }
-
-    var sortRank: Int {
-        switch self {
-        case .geminiAI: 0
-        case .claudeGPT: 1
-        }
-    }
 }
 
 private struct AntigravityModelVersion: Comparable {
@@ -69,9 +62,7 @@ private struct AntigravityModelVersion: Comparable {
     let minor: Int
 
     static func < (lhs: AntigravityModelVersion, rhs: AntigravityModelVersion) -> Bool {
-        if lhs.major != rhs.major {
-            return lhs.major < rhs.major
-        }
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
         return lhs.minor < rhs.minor
     }
 }
@@ -156,22 +147,14 @@ public struct AntigravityStatusSnapshot: Sendable {
             nil
         }
 
-        var poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota] = [:]
-        if let primaryQuota {
-            poolRepresentatives[.geminiAI] = primaryQuota
-        }
-        if let secondaryQuota {
-            poolRepresentatives[.claudeGPT] = secondaryQuota
-        }
-
         let primary = primaryQuota.map(Self.rateWindow(for:))
         let secondary = secondaryQuota.map(Self.rateWindow(for:))
         let extraWindows = Self.extraRateWindows(
             from: normalized,
             summaryCandidates: summaryCandidates,
             compactFallbackModelID: fallbackQuota?.modelId,
-            poolRepresentatives: poolRepresentatives,
-            suppressPoolMirroring: self.source == .remote)
+            representedQuotas: [.geminiAI: primaryQuota, .claudeGPT: secondaryQuota].compactMapValues(\.self),
+            source: self.source)
 
         let identity = ProviderIdentitySnapshot(
             providerID: .antigravity,
@@ -615,15 +598,9 @@ public struct AntigravityStatusSnapshot: Sendable {
 
     private static func parseTier(from label: String, modelId: String) -> Int {
         let combined = label + " " + modelId
-        if combined.contains("high") {
-            return 0
-        }
-        if combined.contains("medium") {
-            return 1
-        }
-        if combined.contains("low") {
-            return 2
-        }
+        if combined.contains("high") { return 0 }
+        if combined.contains("medium") { return 1 }
+        if combined.contains("low") { return 2 }
         return 1
     }
 
@@ -665,12 +642,11 @@ public struct AntigravityStatusSnapshot: Sendable {
         from models: [AntigravityNormalizedModel],
         summaryCandidates: [AntigravityNormalizedModel],
         compactFallbackModelID: String?,
-        poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota],
-        suppressPoolMirroring: Bool) -> [NamedRateWindow]
+        representedQuotas: [AntigravityUsagePool: AntigravityModelQuota],
+        source: AntigravityModelQuotaSource) -> [NamedRateWindow]
     {
-        let representedPools = Set(poolRepresentatives.keys)
         let resetOnlyPoolWindows = [AntigravityUsagePool.geminiAI, .claudeGPT].compactMap { pool -> NamedRateWindow? in
-            guard !representedPools.contains(pool) else { return nil }
+            guard representedQuotas[pool] == nil else { return nil }
             let candidates = summaryCandidates.filter { Self.usagePool(for: $0) == pool }
             guard let resetOnly = candidates.first(where: { model in
                 model.quota.remainingFraction == nil &&
@@ -685,47 +661,39 @@ public struct AntigravityStatusSnapshot: Sendable {
                 usageKnown: false)
         }
 
-        let distinctCandidates = models.filter {
-            $0.quota.modelId == compactFallbackModelID || Self.shouldShowDistinctExtraWindow(
-                $0,
-                poolRepresentative: Self.usagePool(for: $0).flatMap { poolRepresentatives[$0] },
-                suppressPoolMirroring: suppressPoolMirroring)
-        }
-
-        let canonicalWindows = Dictionary(grouping: distinctCandidates, by: { $0.quota.modelId.lowercased() })
-            .values
-            .compactMap { group in
-                group.min(by: Self.extraModelPrecedes)
-            }
-        let fallbackCanonicalModel = canonicalWindows.first {
-            $0.quota.modelId.lowercased() == compactFallbackModelID?.lowercased()
-        }
-        let fallbackKey = fallbackCanonicalModel.map { ExtraQuotaKey(quota: $0.quota) }
-        let distinctWindows = Dictionary(grouping: canonicalWindows, by: { ExtraQuotaKey(quota: $0.quota) })
+        let distinctWindows = Dictionary(grouping: models, by: { $0.quota.modelId.lowercased() })
             .values
             .compactMap { group -> AntigravityNormalizedModel? in
-                // A matching title alone does not establish a shared reset window.
-                group.min(by: Self.extraModelPrecedes)
+                // Retired Flash mapping can collapse multiple wire ids to one canonical id;
+                // keep the most constrained (lowest remaining) to avoid duplicate windows.
+                group.min { lhs, rhs in
+                    if (lhs.quota.remainingFraction != nil) != (rhs.quota.remainingFraction != nil) {
+                        return lhs.quota.remainingFraction != nil
+                    }
+                    if lhs.quota.remainingPercent != rhs.quota.remainingPercent {
+                        return lhs.quota.remainingPercent < rhs.quota.remainingPercent
+                    }
+                    return lhs.quota.label < rhs.quota.label
+                }
+            }
+            .filter { model in
+                let pool = Self.usagePool(for: model) ?? (model.isAutocomplete ? .geminiAI : nil)
+                return model.quota.modelId == compactFallbackModelID || Self.shouldShowDistinctExtraWindow(
+                    model,
+                    poolQuota: source == .remote ? pool.flatMap { representedQuotas[$0] } : nil)
             }
             .sorted(by: Self.modelOrderPrecedes)
             .map { m in
                 NamedRateWindow(
-                    id: ExtraQuotaKey(quota: m.quota) == fallbackKey
-                        ? Self.compactFallbackWindowID(modelID: compactFallbackModelID ?? m.quota.modelId)
+                    id: m.quota.modelId == compactFallbackModelID
+                        ? Self.compactFallbackWindowID(modelID: m.quota.modelId)
                         : m.quota.modelId,
                     title: Self.quotaDisplayLabel(m.quota),
                     window: Self.rateWindow(for: m.quota),
                     usageKnown: m.quota.remainingFraction != nil)
             }
 
-        return resetOnlyPoolWindows.sorted { lhs, rhs in
-            guard let lhsPool = Self.pool(forExtraWindowID: lhs.id),
-                  let rhsPool = Self.pool(forExtraWindowID: rhs.id)
-            else {
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
-            return lhsPool.sortRank < rhsPool.sortRank
-        } + distinctWindows
+        return resetOnlyPoolWindows + distinctWindows
     }
 
     private static func compactFallbackWindowID(modelID: String) -> String {
@@ -734,13 +702,11 @@ public struct AntigravityStatusSnapshot: Sendable {
 
     private static func shouldShowDistinctExtraWindow(
         _ model: AntigravityNormalizedModel,
-        poolRepresentative: AntigravityModelQuota?,
-        suppressPoolMirroring: Bool) -> Bool
+        poolQuota: AntigravityModelQuota?) -> Bool
     {
         guard !self.isSummaryCandidate(model) else { return false }
-        if suppressPoolMirroring, let poolRepresentative, self.isQuotaMirroring(
-            model.quota,
-            representative: poolRepresentative)
+        if let poolQuota, let reset = model.quota.resetTime,
+           reset == poolQuota.resetTime, model.quota.remainingFraction == poolQuota.remainingFraction
         {
             return false
         }
@@ -750,67 +716,6 @@ public struct AntigravityStatusSnapshot: Sendable {
         return model.quota.remainingPercent < 99.9
     }
 
-    private struct ExtraQuotaKey: Hashable {
-        let title: String
-        let resetTime: Date?
-        let modelIDWithoutReset: String?
-
-        init(quota: AntigravityModelQuota) {
-            self.title = AntigravityStatusSnapshot.quotaDisplayLabel(quota)
-            self.resetTime = quota.resetTime
-            // Missing timestamps cannot prove that different models share a quota lane.
-            self.modelIDWithoutReset = quota.resetTime == nil ? quota.modelId.lowercased() : nil
-        }
-    }
-
-    private static func extraModelPrecedes(
-        _ lhs: AntigravityNormalizedModel,
-        _ rhs: AntigravityNormalizedModel) -> Bool
-    {
-        switch (lhs.quota.remainingFraction, rhs.quota.remainingFraction) {
-        case let (.some(l), .some(r)):
-            if l != r {
-                return l < r
-            }
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        case (.none, .none):
-            break
-        }
-
-        let labelCompare = lhs.quota.label.localizedCaseInsensitiveCompare(rhs.quota.label)
-        if labelCompare != .orderedSame {
-            return labelCompare == .orderedAscending
-        }
-        return lhs.quota.modelId < rhs.quota.modelId
-    }
-
-    private static func isQuotaMirroring(
-        _ quota: AntigravityModelQuota,
-        representative: AntigravityModelQuota) -> Bool
-    {
-        guard let quotaReset = quota.resetTime,
-              let repReset = representative.resetTime,
-              quotaReset == repReset
-        else { return false }
-        switch (quota.remainingFraction, representative.remainingFraction) {
-        case let (.some(lhs), .some(rhs)):
-            return abs(lhs - rhs) < 0.0001
-        default:
-            return false
-        }
-    }
-
-    private static func pool(forExtraWindowID id: String) -> AntigravityUsagePool? {
-        switch id {
-        case AntigravityUsagePool.geminiAI.id: .geminiAI
-        case AntigravityUsagePool.claudeGPT.id: .claudeGPT
-        default: nil
-        }
-    }
-
     private static func usagePool(for model: AntigravityNormalizedModel) -> AntigravityUsagePool? {
         switch model.family {
         case .geminiPro, .geminiFlash:
@@ -818,7 +723,7 @@ public struct AntigravityStatusSnapshot: Sendable {
         case .claudeModels, .gpt:
             .claudeGPT
         case .unknown:
-            model.isAutocomplete ? .geminiAI : nil
+            nil
         }
     }
 
@@ -1123,9 +1028,7 @@ public struct AntigravityStatusProbe: Sendable {
 
     static func invalidCode(_ code: CodeValue?) -> String? {
         guard let code else { return nil }
-        if code.isOK {
-            return nil
-        }
+        if code.isOK { return nil }
         return "\(code.rawValue)"
     }
 
@@ -1251,9 +1154,7 @@ public struct AntigravityStatusProbe: Sendable {
         var results: [ProcessInfoResult] = []
         for entry in entries {
             guard let kind = Self.antigravityProcessKind(entry.command) else { continue }
-            if !Self.processKind(kind, matches: scope) {
-                continue
-            }
+            if !Self.processKind(kind, matches: scope) { continue }
             // The IDE language server authenticates local requests with a
             // `--csrf_token` and must keep requiring it: skip a tokenless IDE
             // or app match so a later valid server can still be found (and surface
@@ -1368,23 +1269,13 @@ public struct AntigravityStatusProbe: Sendable {
     }
 
     private static func isAntigravityCommandLine(_ command: String) -> Bool {
-        if command.contains("--app_data_dir") && command.contains("antigravity") {
-            return true
-        }
-        if command.contains("antigravity.app/") || command.contains("antigravity.app\\") {
-            return true
-        }
+        if command.contains("--app_data_dir") && command.contains("antigravity") { return true }
+        if command.contains("antigravity.app/") || command.contains("antigravity.app\\") { return true }
         // The renamed Gemini desktop app (#2836). Require a leading path
         // separator so unrelated names like "notgemini.app" cannot match.
-        if command.contains("/gemini.app/") || command.contains("\\gemini.app\\") {
-            return true
-        }
-        if command.contains("antigravity ide.app/") || command.contains("antigravity ide.app\\") {
-            return true
-        }
-        if command.contains("/antigravity/") || command.contains("\\antigravity\\") {
-            return true
-        }
+        if command.contains("/gemini.app/") || command.contains("\\gemini.app\\") { return true }
+        if command.contains("antigravity ide.app/") || command.contains("antigravity ide.app\\") { return true }
+        if command.contains("/antigravity/") || command.contains("\\antigravity\\") { return true }
         return false
     }
 
@@ -1544,9 +1435,7 @@ public struct AntigravityStatusProbe: Sendable {
                 throw AntigravityStatusProbeError.timedOut
             }
             let ok = await testConnectivity(endpoint, attemptTimeout)
-            if ok {
-                return endpoint
-            }
+            if ok { return endpoint }
         }
         if let fallback = fallbackProbeEndpoint(candidateEndpoints) {
             self.log.debug("Port probe fell back to best-effort endpoint", metadata: [
@@ -1624,11 +1513,9 @@ public struct AntigravityStatusProbe: Sendable {
             return false
         }
     }
-}
 
-// MARK: - HTTP
+    // MARK: - HTTP
 
-extension AntigravityStatusProbe {
     struct RequestPayload {
         let path: String
         let body: [String: Any]

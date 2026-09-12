@@ -3,437 +3,121 @@ import Testing
 @testable import CodexBarCore
 
 struct AntigravityPoolDeduplicationTests {
-    @Test
-    func `remote source suppresses pool mirroring variants when shared pool is partially consumed`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Pro (High)",
-                    modelId: "gemini-3-1-pro-high",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Claude Sonnet 3.7",
-                    modelId: "claude-3-7-sonnet",
-                    remainingFraction: 1.0,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                // Internal pool-mirroring variants sharing the same consumed fraction and reset time
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-exp",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3.5 Flash Lite",
-                    modelId: "gemini-3-5-flash-lite",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Image",
-                    modelId: "gemini-3-1-flash-image",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-            ],
+    private static let reset = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private static func quota(
+        _ id: String,
+        fraction: Double? = 0.7,
+        reset: Date? = Self.reset,
+        label: String? = nil) -> AntigravityModelQuota
+    {
+        AntigravityModelQuota(
+            label: label ?? id,
+            modelId: id,
+            remainingFraction: fraction,
+            resetTime: reset,
+            resetDescription: "Resets later")
+    }
+
+    private static func usage(
+        _ models: [AntigravityModelQuota],
+        source: AntigravityModelQuotaSource = .remote) throws -> UsageSnapshot
+    {
+        try AntigravityStatusSnapshot(
+            modelQuotas: models,
             accountEmail: nil,
             accountPlan: nil,
-            source: .remote)
+            source: source).toUsageSnapshot()
+    }
 
-        let usage = try snapshot.toUsageSnapshot()
-        #expect(usage.primary?.remainingPercent.rounded() == 96)
-        #expect(usage.secondary?.remainingPercent.rounded() == 100)
-        // Pool-mirroring variants must be suppressed from extraRateWindows
-        #expect(usage.extraRateWindows == nil)
+    @Test(arguments: [AntigravityModelQuotaSource.remote, .local])
+    func `only remote pool mirrors are suppressed`(source: AntigravityModelQuotaSource) throws {
+        let variants = ["gemini-test-flash-lite", "gemini-test-pro-image", "tab_test_autocomplete"]
+        let usage = try Self.usage(
+            [Self.quota("gemini-test-flash")] + variants.map { Self.quota($0) }, source: source)
+        #expect(usage.primary?.usedPercent == 30)
+        #expect(Set(usage.extraRateWindows?.map(\.id) ?? []) == (source == .remote ? [] : Set(variants)))
+    }
+
+    @Test(arguments: [0.2, 0.70005, 0.8])
+    func `independently consumed variants remain distinct`(fraction: Double) throws {
+        let usage = try Self.usage([
+            Self.quota("gemini-test-flash"),
+            Self.quota("gemini-test-flash-lite", fraction: fraction),
+        ])
+        let row = try #require(usage.extraRateWindows?.first)
+        #expect(row.id == "gemini-test-flash-lite")
+        #expect(row.window.usedPercent == 100 - fraction * 100)
+    }
+
+    @Test(arguments: [0, 1, 2, 3])
+    func `different or unobserved resets preserve variants`(combination: Int) throws {
+        let poolReset = combination == 1 || combination == 3 ? nil : Self.reset
+        let variantReset = combination == 2 || combination == 3 ? nil : Self.reset.addingTimeInterval(60)
+        let usage = try Self.usage([
+            Self.quota("gemini-test-flash", reset: poolReset),
+            Self.quota("gemini-test-flash-lite", reset: variantReset),
+        ])
+        #expect(usage.extraRateWindows?.map(\.id) == ["gemini-test-flash-lite"])
     }
 
     @Test
-    func `remote source deduplicates multiple entries sharing the same display label`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 1.0,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                // Multiple variants resolving to the same display label with distinct usage
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-a",
-                    remainingFraction: 0.50,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-b",
-                    remainingFraction: 0.40,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.title == "Gemini 3.1 Flash Lite")
-        // Keeps the most constrained entry (40% remaining -> 60% used)
-        #expect(extras.first?.window.usedPercent == 60)
+    func `reset only variants retain unavailable usage`() throws {
+        let usage = try Self.usage([
+            Self.quota("gemini-test-flash"),
+            Self.quota("gemini-test-flash-lite", fraction: nil),
+        ])
+        #expect(usage.extraRateWindows?.first?.usageKnown == false)
     }
 
-    @Test
-    func `remote source preserves variants with distinct quota consumption`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                // Variant with distinct usage from the 96% pool representative
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Image",
-                    modelId: "gemini-3-1-flash-image",
-                    remainingFraction: 0.30,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.title == "Gemini 3.1 Flash Image")
-        #expect(extras.first?.window.usedPercent == 70)
-    }
-
-    @Test
-    func `local source retains curated variants even if mirroring summary`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3.5 Flash Lite",
-                    modelId: "gemini-3-5-flash-lite",
-                    remainingFraction: 0.96,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .local)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.title == "Gemini 3.5 Flash Lite")
-        #expect(extras.first?.window.usedPercent == 4)
-    }
-
-    @Test
-    func `missing reset timestamp is not treated as mirrored quota`() throws {
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.96,
-                    resetTime: nil,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Gemini 3.5 Flash Lite",
-                    modelId: "gemini-3-5-flash-lite",
-                    remainingFraction: 0.96,
-                    resetTime: nil,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.title == "Gemini 3.5 Flash Lite")
-    }
-
-    @Test
-    func `canonical model id deduplication runs before display label grouping`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.40,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                // Two entries that share the same model ID but have different raw labels
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Image Experimental",
-                    modelId: "gemini-3-1-flash-image",
-                    remainingFraction: 0.80,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Image Preview",
-                    modelId: "gemini-3-1-flash-image",
-                    remainingFraction: 0.50,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h 48m"),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.window.usedPercent == 50)
-    }
-
-    @Test
-    func `local source with known primary and reset candidate avoids extra pool row`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.80,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h"),
-                AntigravityModelQuota(
-                    label: "Gemini 3 Pro",
-                    modelId: "gemini-3-pro",
-                    remainingFraction: nil,
-                    resetTime: resetTime,
-                    resetDescription: "Resets in 3h"),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .local)
-
-        let usage = try snapshot.toUsageSnapshot()
-        #expect(usage.primary?.usedPercent == 20)
-        // Gemini pool already has primary representation; reset-only pool row must not be added to extras
-        #expect(usage.extraRateWindows?.contains(where: { $0.id == "antigravity-gemini" }) != true)
-    }
-
-    @Test
-    func `fractional quota comparison preserves precision between near-zero values`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 1.0,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                // 0.004 remaining (0.4%) vs exact 0.0 remaining (exhausted)
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-fraction",
-                    remainingFraction: 0.004,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-exhausted",
-                    remainingFraction: 0.0,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.id == "gemini-3-1-flash-lite-exhausted")
-        #expect(extras.first?.window.remainingPercent == 0.0)
-    }
-
-    @Test
-    func `compact fallback identity survives display title dedup`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Custom Engine",
-                    modelId: "MODEL_PLACEHOLDER_A",
-                    remainingFraction: 0.50,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Custom Engine",
-                    modelId: "MODEL_PLACEHOLDER_B",
-                    remainingFraction: 0.50,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .local)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.id.hasPrefix("antigravity-compact-fallback-") == true)
+    @Test(arguments: [false, true], [0.0, 0.4, 1.0])
+    func `known quota wins over reset only duplicate canonical model`(reverse: Bool, fraction: Double) throws {
+        let rows = [
+            Self.quota("gemini-test-flash-lite", fraction: nil),
+            Self.quota("gemini-test-flash-lite", fraction: fraction),
+        ]
+        let usage = try Self.usage(reverse ? Array(rows.reversed()) : rows)
+        if fraction == 1 {
+            #expect(usage.extraRateWindows == nil)
+        } else {
+            let row = try #require(usage.extraRateWindows?.first)
+            #expect(usage.extraRateWindows?.count == 1)
+            #expect(row.usageKnown)
+            #expect(row.window.usedPercent == 100 - fraction * 100)
+        }
     }
 
     @Test(arguments: [false, true])
-    func `compact fallback keeps its identity with the most constrained quota`(reversed: Bool) throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let quotas = [
-            AntigravityModelQuota(
-                label: "Custom Engine",
-                modelId: "MODEL_PLACEHOLDER_A",
-                remainingFraction: 0.50,
-                resetTime: resetTime,
-                resetDescription: nil),
-            AntigravityModelQuota(
-                label: "Custom Engine",
-                modelId: "custom-image",
-                remainingFraction: 0.10,
-                resetTime: resetTime,
-                resetDescription: "More constrained quota"),
-        ]
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: reversed ? Array(quotas.reversed()) : quotas,
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .local)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        let extra = try #require(extras.first)
-        #expect(extra.id == "antigravity-compact-fallback-MODEL_PLACEHOLDER_A")
-        #expect(extra.window.usedPercent == 90)
-        #expect(extra.window.resetDescription == "More constrained quota")
-        #expect(extra.usageKnown)
-    }
-
-    @Test(arguments: [0, 1, 2])
-    func `matching titles retain distinct or unobserved reset windows`(missingResets: Int) throws {
-        let firstReset = missingResets > 0 ? nil : Date(timeIntervalSince1970: 1_775_000_000)
-        let secondReset = missingResets > 1 ? nil : Date(timeIntervalSince1970: 1_775_003_600)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Custom Image",
-                    modelId: "custom-image-a",
-                    remainingFraction: 0.20,
-                    resetTime: firstReset,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Custom Image",
-                    modelId: "custom-image-b",
-                    remainingFraction: 0.50,
-                    resetTime: secondReset,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let extras = try #require(snapshot.toUsageSnapshot().extraRateWindows)
-        #expect(extras.count == 2)
-        #expect(Set(extras.map(\.id)) == ["custom-image-a", "custom-image-b"])
-        #expect(extras.first(where: { $0.id == "custom-image-a" })?.window.resetsAt == firstReset)
-        #expect(extras.first(where: { $0.id == "custom-image-b" })?.window.resetsAt == secondReset)
+    func `equal titles retain canonical identity as usage changes`(reverse: Bool) throws {
+        let firstID = "gemini-test-flash-lite-one"
+        let secondID = "gemini-test-flash-lite-two"
+        for fraction in [0.3, 0.5] {
+            let rows = [
+                Self.quota(firstID, fraction: fraction, label: "Test Flash Lite"),
+                Self.quota(secondID, fraction: 0.4, label: "Test Flash Lite"),
+            ]
+            let usage = try Self.usage(reverse ? Array(rows.reversed()) : rows)
+            #expect(Set(usage.extraRateWindows?.map(\.id) ?? []) == [firstID, secondID])
+        }
     }
 
     @Test
-    func `mixed known and reset-only candidates with duplicate titles preserve known usage`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 1.0,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-known",
-                    remainingFraction: 0.30,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Gemini 3.1 Flash Lite",
-                    modelId: "gemini-3-1-flash-lite-reset-only",
-                    remainingFraction: nil,
-                    resetTime: resetTime,
-                    resetDescription: "Resets soon"),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        let extras = try #require(usage.extraRateWindows)
-        #expect(extras.count == 1)
-        #expect(extras.first?.id == "gemini-3-1-flash-lite-known")
-        #expect(extras.first?.window.usedPercent == 70)
+    func `autocomplete keeps its known family and unknown models stay independent`() throws {
+        let usage = try Self.usage([
+            Self.quota("gemini-test-flash"),
+            Self.quota("claude-test-model", fraction: 0.5),
+            Self.quota("claude-test-autocomplete"),
+            Self.quota("orbit-test-image"),
+        ])
+        #expect(Set(usage.extraRateWindows?.map(\.id) ?? []) == ["claude-test-autocomplete", "orbit-test-image"])
     }
 
     @Test
-    func `autocomplete variant mirroring gemini pool is suppressed on remote projection`() throws {
-        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
-        let snapshot = AntigravityStatusSnapshot(
-            modelQuotas: [
-                AntigravityModelQuota(
-                    label: "Gemini 3 Flash",
-                    modelId: "gemini-3-flash",
-                    remainingFraction: 0.90,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-                AntigravityModelQuota(
-                    label: "Tab Autocomplete",
-                    modelId: "tab_autocomplete_model",
-                    remainingFraction: 0.90,
-                    resetTime: resetTime,
-                    resetDescription: nil),
-            ],
-            accountEmail: nil,
-            accountPlan: nil,
-            source: .remote)
-
-        let usage = try snapshot.toUsageSnapshot()
-        #expect(usage.extraRateWindows == nil)
+    func `reset only pools keep Gemini then Claude order`() throws {
+        let usage = try Self.usage([
+            Self.quota("claude-test-model", fraction: nil),
+            Self.quota("gemini-test-flash", fraction: nil),
+        ])
+        #expect(usage.extraRateWindows?.map(\.id) == ["antigravity-gemini", "antigravity-claude-gpt"])
     }
 }
