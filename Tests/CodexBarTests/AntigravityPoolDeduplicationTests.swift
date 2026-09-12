@@ -129,4 +129,95 @@ struct AntigravityPoolDeduplicationTests {
         #expect(extras.first?.title == "Gemini 3.1 Flash Image")
         #expect(extras.first?.window.usedPercent == 70)
     }
+
+    @Test
+    func `local source retains curated variants even if mirroring summary`() throws {
+        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: [
+                AntigravityModelQuota(
+                    label: "Gemini 3 Flash",
+                    modelId: "gemini-3-flash",
+                    remainingFraction: 0.96,
+                    resetTime: resetTime,
+                    resetDescription: "Resets in 3h 48m"),
+                AntigravityModelQuota(
+                    label: "Gemini 3.5 Flash Lite",
+                    modelId: "gemini-3-5-flash-lite",
+                    remainingFraction: 0.96,
+                    resetTime: resetTime,
+                    resetDescription: "Resets in 3h 48m"),
+            ],
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .local)
+
+        let usage = try snapshot.toUsageSnapshot()
+        let extras = try #require(usage.extraRateWindows)
+        #expect(extras.count == 1)
+        #expect(extras.first?.title == "Gemini 3.5 Flash Lite")
+        #expect(extras.first?.window.usedPercent == 4)
+    }
+
+    @Test
+    func `missing reset timestamp is not treated as mirrored quota`() throws {
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: [
+                AntigravityModelQuota(
+                    label: "Gemini 3 Flash",
+                    modelId: "gemini-3-flash",
+                    remainingFraction: 0.96,
+                    resetTime: nil,
+                    resetDescription: nil),
+                AntigravityModelQuota(
+                    label: "Gemini 3.5 Flash Lite",
+                    modelId: "gemini-3-5-flash-lite",
+                    remainingFraction: 0.96,
+                    resetTime: nil,
+                    resetDescription: nil),
+            ],
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .remote)
+
+        let usage = try snapshot.toUsageSnapshot()
+        let extras = try #require(usage.extraRateWindows)
+        #expect(extras.count == 1)
+        #expect(extras.first?.title == "Gemini 3.5 Flash Lite")
+    }
+
+    @Test
+    func `canonical model id deduplication runs before display label grouping`() throws {
+        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: [
+                AntigravityModelQuota(
+                    label: "Gemini 3 Flash",
+                    modelId: "gemini-3-flash",
+                    remainingFraction: 0.40,
+                    resetTime: resetTime,
+                    resetDescription: "Resets in 3h 48m"),
+                // Two entries that share the same model ID but have different raw labels
+                AntigravityModelQuota(
+                    label: "Gemini 3.1 Flash Image Experimental",
+                    modelId: "gemini-3-1-flash-image",
+                    remainingFraction: 0.80,
+                    resetTime: resetTime,
+                    resetDescription: "Resets in 3h 48m"),
+                AntigravityModelQuota(
+                    label: "Gemini 3.1 Flash Image Preview",
+                    modelId: "gemini-3-1-flash-image",
+                    remainingFraction: 0.50,
+                    resetTime: resetTime,
+                    resetDescription: "Resets in 3h 48m"),
+            ],
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .remote)
+
+        let usage = try snapshot.toUsageSnapshot()
+        let extras = try #require(usage.extraRateWindows)
+        #expect(extras.count == 1)
+        #expect(extras.first?.window.usedPercent == 50)
+    }
 }
