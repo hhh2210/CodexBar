@@ -157,13 +157,11 @@ public struct AntigravityStatusSnapshot: Sendable {
         }
 
         var poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota] = [:]
-        if self.source == .remote {
-            if let primaryQuota {
-                poolRepresentatives[.geminiAI] = primaryQuota
-            }
-            if let secondaryQuota {
-                poolRepresentatives[.claudeGPT] = secondaryQuota
-            }
+        if let primaryQuota {
+            poolRepresentatives[.geminiAI] = primaryQuota
+        }
+        if let secondaryQuota {
+            poolRepresentatives[.claudeGPT] = secondaryQuota
         }
 
         let primary = primaryQuota.map(Self.rateWindow(for:))
@@ -172,7 +170,8 @@ public struct AntigravityStatusSnapshot: Sendable {
             from: normalized,
             summaryCandidates: summaryCandidates,
             compactFallbackModelID: fallbackQuota?.modelId,
-            poolRepresentatives: poolRepresentatives)
+            poolRepresentatives: poolRepresentatives,
+            suppressPoolMirroring: self.source == .remote)
 
         let identity = ProviderIdentitySnapshot(
             providerID: .antigravity,
@@ -666,7 +665,8 @@ public struct AntigravityStatusSnapshot: Sendable {
         from models: [AntigravityNormalizedModel],
         summaryCandidates: [AntigravityNormalizedModel],
         compactFallbackModelID: String?,
-        poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota]) -> [NamedRateWindow]
+        poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota],
+        suppressPoolMirroring: Bool) -> [NamedRateWindow]
     {
         let representedPools = Set(poolRepresentatives.keys)
         let resetOnlyPoolWindows = [AntigravityUsagePool.geminiAI, .claudeGPT].compactMap { pool -> NamedRateWindow? in
@@ -688,7 +688,8 @@ public struct AntigravityStatusSnapshot: Sendable {
         let distinctCandidates = models.filter {
             $0.quota.modelId == compactFallbackModelID || Self.shouldShowDistinctExtraWindow(
                 $0,
-                poolRepresentative: Self.usagePool(for: $0).flatMap { poolRepresentatives[$0] })
+                poolRepresentative: Self.usagePool(for: $0).flatMap { poolRepresentatives[$0] },
+                suppressPoolMirroring: suppressPoolMirroring)
         }
 
         let canonicalWindows = Dictionary(grouping: distinctCandidates, by: { $0.quota.modelId.lowercased() })
@@ -732,10 +733,14 @@ public struct AntigravityStatusSnapshot: Sendable {
 
     private static func shouldShowDistinctExtraWindow(
         _ model: AntigravityNormalizedModel,
-        poolRepresentative: AntigravityModelQuota?) -> Bool
+        poolRepresentative: AntigravityModelQuota?,
+        suppressPoolMirroring: Bool) -> Bool
     {
         guard !self.isSummaryCandidate(model) else { return false }
-        if let poolRepresentative, self.isQuotaMirroring(model.quota, representative: poolRepresentative) {
+        if suppressPoolMirroring, let poolRepresentative, self.isQuotaMirroring(
+            model.quota,
+            representative: poolRepresentative)
+        {
             return false
         }
         if model.quota.remainingFraction == nil {
@@ -760,10 +765,8 @@ public struct AntigravityStatusSnapshot: Sendable {
 
         switch (lhs.quota.remainingFraction, rhs.quota.remainingFraction) {
         case let (.some(l), .some(r)):
-            let lPercent = Int((l * 100).rounded())
-            let rPercent = Int((r * 100).rounded())
-            if lPercent != rPercent {
-                return lPercent < rPercent
+            if abs(l - r) > 0.000001 {
+                return l < r
             }
         case (.some, .none):
             return true
