@@ -347,4 +347,30 @@ struct AntigravityPoolDeduplicationTests {
         #expect(extras.first?.id == "gemini-3-1-flash-lite-known")
         #expect(extras.first?.window.usedPercent == 70)
     }
+
+    @Test
+    func `autocomplete variant mirroring gemini pool is suppressed on remote projection`() throws {
+        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: [
+                AntigravityModelQuota(
+                    label: "Gemini 3 Flash",
+                    modelId: "gemini-3-flash",
+                    remainingFraction: 0.90,
+                    resetTime: resetTime,
+                    resetDescription: nil),
+                AntigravityModelQuota(
+                    label: "Tab Autocomplete",
+                    modelId: "tab_autocomplete_model",
+                    remainingFraction: 0.90,
+                    resetTime: resetTime,
+                    resetDescription: nil),
+            ],
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .remote)
+
+        let usage = try snapshot.toUsageSnapshot()
+        #expect(usage.extraRateWindows == nil)
+    }
 }

@@ -814,7 +814,7 @@ public struct AntigravityStatusSnapshot: Sendable {
         case .claudeModels, .gpt:
             .claudeGPT
         case .unknown:
-            nil
+            model.isAutocomplete ? .geminiAI : nil
         }
     }
 
