@@ -154,16 +154,21 @@ public struct AntigravityStatusSnapshot: Sendable {
             nil
         }
 
+        var poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota] = [:]
+        if let primaryQuota {
+            poolRepresentatives[.geminiAI] = primaryQuota
+        }
+        if let secondaryQuota {
+            poolRepresentatives[.claudeGPT] = secondaryQuota
+        }
+
         let primary = primaryQuota.map(Self.rateWindow(for:))
         let secondary = secondaryQuota.map(Self.rateWindow(for:))
         let extraWindows = Self.extraRateWindows(
             from: normalized,
             summaryCandidates: summaryCandidates,
             compactFallbackModelID: fallbackQuota?.modelId,
-            representedPools: Set([
-                primaryQuota.map { _ in AntigravityUsagePool.geminiAI },
-                secondaryQuota.map { _ in AntigravityUsagePool.claudeGPT },
-            ].compactMap(\.self)))
+            poolRepresentatives: poolRepresentatives)
 
         let identity = ProviderIdentitySnapshot(
             providerID: .antigravity,
@@ -651,8 +656,9 @@ public struct AntigravityStatusSnapshot: Sendable {
         from models: [AntigravityNormalizedModel],
         summaryCandidates: [AntigravityNormalizedModel],
         compactFallbackModelID: String?,
-        representedPools: Set<AntigravityUsagePool>) -> [NamedRateWindow]
+        poolRepresentatives: [AntigravityUsagePool: AntigravityModelQuota]) -> [NamedRateWindow]
     {
+        let representedPools = Set(poolRepresentatives.keys)
         let resetOnlyPoolWindows = [AntigravityUsagePool.geminiAI, .claudeGPT].compactMap { pool -> NamedRateWindow? in
             guard !representedPools.contains(pool) else { return nil }
             let candidates = summaryCandidates.filter { Self.usagePool(for: $0) == pool }
@@ -669,18 +675,26 @@ public struct AntigravityStatusSnapshot: Sendable {
                 usageKnown: false)
         }
 
-        let distinctWindows = Dictionary(grouping: models.filter {
-            $0.quota.modelId == compactFallbackModelID || Self.shouldShowDistinctExtraWindow($0)
-        }, by: { $0.quota.modelId.lowercased() })
+        let distinctCandidates = models.filter {
+            $0.quota.modelId == compactFallbackModelID || Self.shouldShowDistinctExtraWindow(
+                $0,
+                poolRepresentative: Self.usagePool(for: $0).flatMap { poolRepresentatives[$0] })
+        }
+
+        let distinctWindows = Dictionary(grouping: distinctCandidates, by: { Self.quotaDisplayLabel($0.quota) })
             .values
             .compactMap { group -> AntigravityNormalizedModel? in
-                // Retired Flash mapping can collapse multiple wire ids to one canonical id;
-                // keep the most constrained (lowest remaining) to avoid duplicate windows.
+                // Collapse multiple wire IDs or variants formatting to the same title
+                // (e.g. duplicate "Gemini 3.1 Flash Lite" entries). Keep the most constrained
+                // (lowest remaining) to avoid duplicate windows.
                 group.min { lhs, rhs in
                     if lhs.quota.remainingPercent != rhs.quota.remainingPercent {
                         return lhs.quota.remainingPercent < rhs.quota.remainingPercent
                     }
-                    return lhs.quota.label < rhs.quota.label
+                    if lhs.quota.label != rhs.quota.label {
+                        return lhs.quota.label < rhs.quota.label
+                    }
+                    return lhs.quota.modelId < rhs.quota.modelId
                 }
             }
             .sorted(by: Self.modelOrderPrecedes)
@@ -708,12 +722,33 @@ public struct AntigravityStatusSnapshot: Sendable {
         "antigravity-compact-fallback-\(modelID)"
     }
 
-    private static func shouldShowDistinctExtraWindow(_ model: AntigravityNormalizedModel) -> Bool {
+    private static func shouldShowDistinctExtraWindow(
+        _ model: AntigravityNormalizedModel,
+        poolRepresentative: AntigravityModelQuota?) -> Bool
+    {
         guard !self.isSummaryCandidate(model) else { return false }
+        if let poolRepresentative, self.isQuotaMirroring(model.quota, representative: poolRepresentative) {
+            return false
+        }
         if model.quota.remainingFraction == nil {
             return model.quota.resetTime != nil || model.quota.resetDescription != nil
         }
         return model.quota.remainingPercent < 99.9
+    }
+
+    private static func isQuotaMirroring(
+        _ quota: AntigravityModelQuota,
+        representative: AntigravityModelQuota) -> Bool
+    {
+        guard quota.resetTime == representative.resetTime else { return false }
+        switch (quota.remainingFraction, representative.remainingFraction) {
+        case let (.some(lhs), .some(rhs)):
+            return abs(lhs - rhs) < 0.0001
+        case (.none, .none):
+            return true
+        default:
+            return false
+        }
     }
 
     private static func pool(forExtraWindowID id: String) -> AntigravityUsagePool? {
