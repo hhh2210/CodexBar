@@ -695,22 +695,23 @@ public struct AntigravityStatusSnapshot: Sendable {
         let canonicalWindows = Dictionary(grouping: distinctCandidates, by: { $0.quota.modelId.lowercased() })
             .values
             .compactMap { group in
-                group.min(by: { Self.extraModelPrecedes($0, $1, compactFallbackModelID: compactFallbackModelID) })
+                group.min(by: Self.extraModelPrecedes)
             }
-
-        let distinctWindows = Dictionary(grouping: canonicalWindows, by: { Self.quotaDisplayLabel($0.quota) })
+        let fallbackCanonicalModel = canonicalWindows.first {
+            $0.quota.modelId.lowercased() == compactFallbackModelID?.lowercased()
+        }
+        let fallbackKey = fallbackCanonicalModel.map { ExtraQuotaKey(quota: $0.quota) }
+        let distinctWindows = Dictionary(grouping: canonicalWindows, by: { ExtraQuotaKey(quota: $0.quota) })
             .values
             .compactMap { group -> AntigravityNormalizedModel? in
-                // Collapse multiple wire IDs or variants formatting to the same title
-                // (e.g. duplicate "Gemini 3.1 Flash Lite" entries). Keep the most constrained
-                // (lowest remaining) to avoid duplicate windows while preserving compact fallback.
-                group.min(by: { Self.extraModelPrecedes($0, $1, compactFallbackModelID: compactFallbackModelID) })
+                // A matching title alone does not establish a shared reset window.
+                group.min(by: Self.extraModelPrecedes)
             }
             .sorted(by: Self.modelOrderPrecedes)
             .map { m in
                 NamedRateWindow(
-                    id: m.quota.modelId == compactFallbackModelID
-                        ? Self.compactFallbackWindowID(modelID: m.quota.modelId)
+                    id: ExtraQuotaKey(quota: m.quota) == fallbackKey
+                        ? Self.compactFallbackWindowID(modelID: compactFallbackModelID ?? m.quota.modelId)
                         : m.quota.modelId,
                     title: Self.quotaDisplayLabel(m.quota),
                     window: Self.rateWindow(for: m.quota),
@@ -749,23 +750,26 @@ public struct AntigravityStatusSnapshot: Sendable {
         return model.quota.remainingPercent < 99.9
     }
 
+    private struct ExtraQuotaKey: Hashable {
+        let title: String
+        let resetTime: Date?
+        let modelIDWithoutReset: String?
+
+        init(quota: AntigravityModelQuota) {
+            self.title = AntigravityStatusSnapshot.quotaDisplayLabel(quota)
+            self.resetTime = quota.resetTime
+            // Missing timestamps cannot prove that different models share a quota lane.
+            self.modelIDWithoutReset = quota.resetTime == nil ? quota.modelId.lowercased() : nil
+        }
+    }
+
     private static func extraModelPrecedes(
         _ lhs: AntigravityNormalizedModel,
-        _ rhs: AntigravityNormalizedModel,
-        compactFallbackModelID: String?) -> Bool
+        _ rhs: AntigravityNormalizedModel) -> Bool
     {
-        if let compactFallbackModelID {
-            if lhs.quota.modelId == compactFallbackModelID, rhs.quota.modelId != compactFallbackModelID {
-                return true
-            }
-            if rhs.quota.modelId == compactFallbackModelID, lhs.quota.modelId != compactFallbackModelID {
-                return false
-            }
-        }
-
         switch (lhs.quota.remainingFraction, rhs.quota.remainingFraction) {
         case let (.some(l), .some(r)):
-            if abs(l - r) > 0.000001 {
+            if l != r {
                 return l < r
             }
         case (.some, .none):

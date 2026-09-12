@@ -286,7 +286,7 @@ struct AntigravityPoolDeduplicationTests {
     }
 
     @Test
-    func `compact fallback identity takes precedence across display title dedup`() throws {
+    func `compact fallback identity survives display title dedup`() throws {
         let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
         let snapshot = AntigravityStatusSnapshot(
             modelQuotas: [
@@ -311,6 +311,69 @@ struct AntigravityPoolDeduplicationTests {
         let extras = try #require(usage.extraRateWindows)
         #expect(extras.count == 1)
         #expect(extras.first?.id.hasPrefix("antigravity-compact-fallback-") == true)
+    }
+
+    @Test(arguments: [false, true])
+    func `compact fallback keeps its identity with the most constrained quota`(reversed: Bool) throws {
+        let resetTime = Date(timeIntervalSince1970: 1_775_000_000)
+        let quotas = [
+            AntigravityModelQuota(
+                label: "Custom Engine",
+                modelId: "MODEL_PLACEHOLDER_A",
+                remainingFraction: 0.50,
+                resetTime: resetTime,
+                resetDescription: nil),
+            AntigravityModelQuota(
+                label: "Custom Engine",
+                modelId: "custom-image",
+                remainingFraction: 0.10,
+                resetTime: resetTime,
+                resetDescription: "More constrained quota"),
+        ]
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: reversed ? Array(quotas.reversed()) : quotas,
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .local)
+
+        let usage = try snapshot.toUsageSnapshot()
+        let extras = try #require(usage.extraRateWindows)
+        #expect(extras.count == 1)
+        let extra = try #require(extras.first)
+        #expect(extra.id == "antigravity-compact-fallback-MODEL_PLACEHOLDER_A")
+        #expect(extra.window.usedPercent == 90)
+        #expect(extra.window.resetDescription == "More constrained quota")
+        #expect(extra.usageKnown)
+    }
+
+    @Test(arguments: [0, 1, 2])
+    func `matching titles retain distinct or unobserved reset windows`(missingResets: Int) throws {
+        let firstReset = missingResets > 0 ? nil : Date(timeIntervalSince1970: 1_775_000_000)
+        let secondReset = missingResets > 1 ? nil : Date(timeIntervalSince1970: 1_775_003_600)
+        let snapshot = AntigravityStatusSnapshot(
+            modelQuotas: [
+                AntigravityModelQuota(
+                    label: "Custom Image",
+                    modelId: "custom-image-a",
+                    remainingFraction: 0.20,
+                    resetTime: firstReset,
+                    resetDescription: nil),
+                AntigravityModelQuota(
+                    label: "Custom Image",
+                    modelId: "custom-image-b",
+                    remainingFraction: 0.50,
+                    resetTime: secondReset,
+                    resetDescription: nil),
+            ],
+            accountEmail: nil,
+            accountPlan: nil,
+            source: .remote)
+
+        let extras = try #require(snapshot.toUsageSnapshot().extraRateWindows)
+        #expect(extras.count == 2)
+        #expect(Set(extras.map(\.id)) == ["custom-image-a", "custom-image-b"])
+        #expect(extras.first(where: { $0.id == "custom-image-a" })?.window.resetsAt == firstReset)
+        #expect(extras.first(where: { $0.id == "custom-image-b" })?.window.resetsAt == secondReset)
     }
 
     @Test
