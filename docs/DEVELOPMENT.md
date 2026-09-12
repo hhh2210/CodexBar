@@ -141,6 +141,23 @@ not establish the cause of a position that changes again after launch; that requ
 make test
 ```
 
+For focused iteration, use native SwiftPM filters with the same file/Keychain isolation and process containment:
+
+```bash
+make test-fast FILTER='AdaptiveRefreshPolicyTests'
+make test-skip-build FILTER='(?<suite>AdaptiveRefreshPolicyTests)'
+./Scripts/test_fast.sh --filter FirstSuite --filter SecondSuite --configuration debug
+```
+
+`FILTER` is passed literally, including Make/shell syntax and apostrophes. The script forwards all arguments to
+`swift test`; SwiftPM owns regex syntax and repeated-filter selection. Runs are serial by default and have a
+30-minute build-and-test deadline, configurable with `CODEXBAR_TEST_NATIVE_TIMEOUT`. An explicit `--skip-build` uses
+existing binaries. No framework search-path override is added.
+
+`make test` remains the complete sharded path. Measured expensive suites run in their own groups, retaining all
+selections and their deadlines while avoiding whole-batch retries. Apple-Silicon macOS CI includes the CLI entry suite;
+the former Intel-runner exclusion is retired.
+
 `make test` and `make check` require a `python3` that provides `os.waitid` with `WNOWAIT`. Some macOS Python
 builds, including Apple's `/usr/bin/python3`, do not provide it. The test runner then stops before its initial
 Swift discovery/build and names the interpreter path, its version, and the missing attributes. Earlier
