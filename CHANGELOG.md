@@ -19,7 +19,7 @@
 - Share provider settings bindings, cookie pickers, deferred link actions, cookie-source persistence, and typed cookie snapshots; replace the app's mutable provider registry with its immutable generated catalog.
 - Remove retired menu views, unused provider helpers, and no-op credential-loading hooks; reuse shared config accessors and simplify redundant menu and account state.
 - Tests: fix native macOS SwiftPM test launches when Sparkle is staged beside the test bundle (from #3584). Thanks @hhh2210!
-- Tests: add contained native focused and skip-build commands, preserve literal SwiftPM filters, isolate expensive suites to avoid batch retries, and restore CLI entry coverage on Apple-Silicon CI (#3584). Thanks @hhh2210!
+- Tests: add contained native focused and skip-build commands, avoid redundant menu-fixture config writes, isolate expensive suites without relaxing deadlines, and restore CLI entry coverage on Apple-Silicon CI (#3584). Thanks @hhh2210!
 - Consolidate status feeds, legacy Keychain string operations, API-token strategies, quota presentation, test-runner detection, and checked usage totals under shared owners while preserving provider-specific behavior.
 - Share browser-profile cookie merging, legacy cookie-file encoding, short-lived import caches, OpenCode web parsing, OneConsole quota projection, and terminal scan buffers without merging provider identities or authentication policies.
 - Centralize Chromium local-storage discovery, plugin management-auth policy, and Codex spend-limit number decoding.

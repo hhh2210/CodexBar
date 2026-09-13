@@ -238,6 +238,10 @@ reads after setup has closed each file. This avoids per-file atomic publication 
 without changing corpus contents or scan budgets. The shared atomic fixture writer remains available
 for replacement and publication tests.
 
+Menu fixtures use `enableTestProviders` to arrange their initial provider selection without repeatedly persisting
+already-correct config entries. The real setter still handles changed flags and selected-provider cleanup. Keep
+provider-toggle actions under test on the production setter; the fixture helper is for setup before observing changes.
+
 ### Cost scanner CPU regressions
 
 `CostUsageJsonl` finds complete physical LF spans with bounded libc `memchr` on Darwin, Glibc, and
