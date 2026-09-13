@@ -104,7 +104,7 @@ struct ProviderPresentationPolicyCharacterizationTests {
             (.claude, nil, true),
             (.ollama, nil, false),
             (.ollama, 300, true),
-            (.antigravity, nil, true),
+            (.antigravity, nil, false),
             (.antigravity, 300, true),
             (.antigravity, 301, false),
             (.kimi, 180, false),
