@@ -2,12 +2,25 @@
 
 ## 0.60.2 — Unreleased
 
+### Changes
+- Dependencies: update KeyboardShortcuts to 3.1.0 while preserving localized recorder prompts, the Linux release/static SDK toolchain to Swift 6.3.3, and Linux desktop CI to Node.js 26.
+
 ### Added
 - Antigravity: estimate supported local token usage at dated API rates, with separate unpriced-request coverage and an explicit non-billing disclaimer.
 - Codex: add the debug-only Workspaces project/session inspector with source, history and privacy updates, plus cancellation when its window closes (#3291). Thanks @AmrMohamad!
 
 ### Fixed
 - Antigravity: retain account-scoped quota observations when the API omits a reset duration, and suppress pace forecasts that would otherwise assume a five-hour cycle.
+- Abacus AI: retain used/total compute credits in CLI text/cards beside billing resets, and stop labelling undated amounts as reset clocks.
+- Manus, MiMo, and Neuralwatt: retain quota counts in CLI text/cards, keep amounts separate from actual reset dates, and preserve Manus monthly/daily details in native menus.
+- LiteLLM: preserve personal and team budget amounts in CLI text/cards and native menus, keeping amounts separate from actual reset dates.
+- Warp: show available add-on credits in Automatic and the provider switcher after monthly credits run out, restore explicit pool percentages, and name quota pools in the percent picker (fixes #3632).
+- LongCat: show token balances as details, keep fuel-pack balances beside their expiry, and parse expiry timestamps with fractional seconds.
+- Usage & Spend: align the Token/Cost picker with the chart and detail text at different menu widths (#3626). Thanks @elijahfriedman!
+- Linux: document complete distro runtime dependencies and one verified CLI/desktop installation flow that stops before extraction on download or checksum failure (#3615, fixes #3614). Thanks @darkrei08!
+- CI: install checksum-verified Swift static SDK archives locally to avoid SwiftPM's Linux downloader teardown crash, and synchronize the late-PTY-fork cleanup fixture.
+- Codex: restore missing cost estimates after changed-session rescans, preserve pricing across partial scans and restarts, and retain saved history when upgrading from 0.60.1 (#3620, related to #3617).
+- Menu: remove empty space and clipped cards after switching merged-menu tabs with different card heights (#3616, fixes #3549). Thanks @zenibako!
 - Mistral: handle signed billing adjustments without intermediate overflow, reject unrepresentable counts without crashing, and retain valid costs when token totals or model rankings are unavailable.
 - Claude: show dated last-known claude-swap usage beside diagnostics, reported spend, disabled slots, and the active account; keep historical quotas out of the menu icon and ready-account suggestions (#3452). Thanks @QuantIntellect!
 - Claude: let an explicitly requested claude-swap re-authentication repair an active slot's foreign credential through the existing source-owned switch command (#3452). Thanks @QuantIntellect!
