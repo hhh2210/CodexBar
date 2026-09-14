@@ -4,7 +4,7 @@ import Testing
 
 struct AntigravityLocalPricingTests {
     @Test(arguments: [UInt64(1_798_761_599), UInt64(1_798_761_600)])
-    func `Gemini estimates price each disjoint token bucket and honor the published cutoff`(seconds: UInt64) throws {
+    func `Gemini estimates each disjoint token bucket and honors the published cutoff`(seconds: UInt64) throws {
         let fixture = try AntigravityLocalFixture()
         try fixture.database(blobs: [AntigravityLocalFixture.blob(
             model: "gemini-3.8-flash",
@@ -23,6 +23,31 @@ struct AntigravityLocalPricingTests {
         #expect(entry.totalTokens == 3100)
         #expect(entry.estimatedRequestCount == 1)
         #expect(entry.pricedRequestCount == 0)
+    }
+
+    @Test
+    func `Claude thinking prices reasoning as output and preserves the recorded model`() throws {
+        let fixture = try AntigravityLocalFixture()
+        try fixture.database(blobs: [AntigravityLocalFixture.blob(
+            model: "claude-opus-4-6-thinking", system: 100, input: 900, output: 20, cacheRead: 2000, reasoning: 80)])
+        let entry = try #require(fixture.report().report.data.first)
+        let expected = (1000 * 5.0 + 2000 * 0.5 + 100 * 25.0) / 1_000_000
+        #expect(try abs(#require(entry.costUSD) - expected) < 1e-12)
+        #expect(entry.totalTokens == 3100)
+        #expect(entry.estimatedRequestCount == 1)
+        #expect(entry.unpricedRequestCount == 0)
+        #expect(entry.modelBreakdowns?.first?.modelName == "claude-opus-4-6-thinking")
+    }
+
+    @Test(arguments: ["gemini-3.5-flash-mid", "gemini-3-flash-agent"])
+    func `retired picker redirects do not establish historical model prices`(model: String) throws {
+        let fixture = try AntigravityLocalFixture()
+        try fixture.database(blobs: [AntigravityLocalFixture.blob(model: model)])
+        let entry = try #require(fixture.report().report.data.first)
+        #expect(entry.costUSD == nil)
+        #expect(entry.totalTokens == 198)
+        #expect(entry.unpricedRequestCount == 1)
+        #expect(entry.estimatedRequestCount == 0)
     }
 
     @Test

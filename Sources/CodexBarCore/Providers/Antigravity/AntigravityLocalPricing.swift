@@ -22,6 +22,8 @@ enum AntigravityLocalPricing {
         // Standard text API rates, verified 2026-09-13. Thinking is billed as output.
         // https://ai.google.dev/gemini-api/docs/pricing
         // These exact IDs share a published introductory price through 2026-12-31.
+        // Do not use canonicalModelID here: retired picker tiers route to a successor,
+        // which does not establish the price of a historical request to the old model.
         guard ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"].contains(model),
               event.cacheWrite == 0
         else { return nil }

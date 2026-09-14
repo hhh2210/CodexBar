@@ -412,8 +412,9 @@ extension CodexBarCLI {
             "Today: \(today)",
             snapshot.historyDays == 1 ? nil : "\(historyLabel): \(total)",
             snapshot.daily.isEmpty ? "No token usage found in the selected period." : nil,
-            hasEstimates && unpriced > 0
-                ? "Partial API-rate estimate: \(unpriced) requests have no supported price." : nil,
+            unpriced > 0
+                ? "\(hasEstimates ? "Partial API-rate estimate" : "Unpriced usage"): "
+                + "\(unpriced) requests have no supported price." : nil,
             hint,
         ]
         return lines.compactMap(\.self).joined(separator: "\n")

@@ -58,6 +58,27 @@ struct AntigravityQuotaHistoryTests {
         #expect(chart.visibleSeries.count == 2)
         #expect(Set(chart.visibleSeries) == ["antigravityGemini:0", "antigravityClaudeGPT:0"])
         #expect(!chart.visibleSeries.contains("session:300"))
+        let unavailable = PlanUtilizationHistoryChartMenuView._modelSnapshotForTesting(
+            histories: histories, provider: .antigravity, snapshot: nil, referenceDate: self.now)
+        #expect(Set(unavailable.visibleSeries) == ["antigravityGemini:0", "antigravityClaudeGPT:0"])
+    }
+
+    @Test(arguments: [-3600.0, 0.0, 3600.0])
+    func `missing snapshot selects the newest stored format with structured ties`(observationOffset: TimeInterval) {
+        let histories = [
+            PlanUtilizationSeriesHistory(
+                name: .antigravityGemini,
+                windowMinutes: 0,
+                entries: [.init(
+                    capturedAt: self.now.addingTimeInterval(observationOffset), usedPercent: 82, resetsAt: nil)]),
+            PlanUtilizationSeriesHistory(
+                name: .session,
+                windowMinutes: 300,
+                entries: [.init(capturedAt: self.now, usedPercent: 20, resetsAt: nil)]),
+        ]
+        let chart = PlanUtilizationHistoryChartMenuView._modelSnapshotForTesting(
+            histories: histories, provider: .antigravity, snapshot: nil, referenceDate: self.now)
+        #expect(chart.visibleSeries == (observationOffset > 0 ? ["antigravityGemini:0"] : ["session:300"]))
     }
 
     @Test

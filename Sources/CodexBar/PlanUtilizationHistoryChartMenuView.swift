@@ -193,8 +193,8 @@ struct PlanUtilizationHistoryChartMenuView: View {
             // Provider-specific by design: pool observations belong only to Antigravity, not session/weekly lanes.
             guard !history.name.isQuotaObservation || provider == .antigravity else { continue }
             if provider == .antigravity {
-                let usesObservations = snapshot.map { !UsageStore.hasAntigravityQuotaSummary($0) }
-                    ?? histories.contains { $0.name.isQuotaObservation }
+                let usesObservations = UsageStore.antigravityHistoryUsesObservations(
+                    snapshot: snapshot, histories: histories)
                 guard history.name.isQuotaObservation == usesObservations else { continue }
             }
             let effectiveName = Self.effectiveSeriesName(provider: provider, history: history)
