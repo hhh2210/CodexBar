@@ -3,6 +3,25 @@ import Testing
 @testable import CodexBarCore
 
 struct AntigravityLocalPricingTests {
+    @Test(arguments: ["claude-opus-4-6-thinking", "gemini-3.8-flash"], [0, 200])
+    func `JSONL cache writes without a duration retain tokens but remain unpriced`(model: String, writes: Int) throws {
+        let fixture = try AntigravityLocalFixture()
+        try fixture.jsonl([
+            #"{"type":"session_meta","sessionId":"fixture-cache-write"}"#,
+            """
+            {"type":"usage","modelId":"\(model)","input":100,"output":30,"cacheRead":50,
+             "cacheWrite":\(writes),"reasoning":0,"timestamp":1787832000250}
+            """.replacingOccurrences(of: "\n", with: ""),
+        ])
+        let report = try fixture.report()
+        let entry = try #require(report.report.data.first)
+        #expect(report.isComplete)
+        #expect(entry.totalTokens == 180 + writes)
+        #expect((entry.costUSD != nil) == (writes == 0))
+        #expect(entry.unpricedRequestCount == (writes == 0 ? 0 : 1))
+        #expect(entry.estimatedRequestCount == (writes == 0 ? 1 : 0))
+    }
+
     @Test(arguments: [UInt64(1_798_761_599), UInt64(1_798_761_600)])
     func `Gemini estimates each disjoint token bucket and honors the published cutoff`(seconds: UInt64) throws {
         let fixture = try AntigravityLocalFixture()

@@ -81,6 +81,52 @@ struct AntigravityQuotaHistoryTests {
         #expect(chart.visibleSeries == (observationOffset > 0 ? ["antigravityGemini:0"] : ["session:300"]))
     }
 
+    @Test(arguments: ["offline", "empty", "placeholder", "nonfinite", "unknown-summary"], [false, true])
+    func `quota unavailable responses preserve the freshest stored format`(source: String, newerPool: Bool) {
+        let unavailable = RateWindow(
+            usedPercent: source == "nonfinite" ? .nan : 0,
+            windowMinutes: nil,
+            resetsAt: nil,
+            resetDescription: nil,
+            isSyntheticPlaceholder: source == "placeholder")
+        // Production offline responses have an unknown extra row; empty OAuth responses have no windows.
+        let extras: [NamedRateWindow]? = switch source {
+        case "offline": [.init(
+                id: "antigravity-offline-conversations",
+                title: "Offline · 1 conversation",
+                window: unavailable,
+                usageKnown: false)]
+        case "unknown-summary": [.init(
+                id: "antigravity-quota-summary-gemini-session",
+                title: "Session",
+                window: unavailable,
+                usageKnown: false)]
+        default: nil
+        }
+        let snapshot = UsageSnapshot(
+            primary: ["placeholder", "nonfinite"].contains(source) ? unavailable : nil,
+            secondary: nil,
+            extraRateWindows: extras,
+            updatedAt: self.now)
+        let histories = [
+            PlanUtilizationSeriesHistory(
+                name: .antigravityGemini,
+                windowMinutes: 0,
+                entries: [.init(
+                    capturedAt: self.now.addingTimeInterval(newerPool ? 3600 : -3600),
+                    usedPercent: 82,
+                    resetsAt: nil)]),
+            PlanUtilizationSeriesHistory(
+                name: .weekly,
+                windowMinutes: 10080,
+                entries: [.init(capturedAt: self.now, usedPercent: 20, resetsAt: nil)]),
+        ]
+        #expect(UsageStore.antigravityQuotaObservationSamples(snapshot: snapshot, capturedAt: self.now).isEmpty)
+        let chart = PlanUtilizationHistoryChartMenuView._modelSnapshotForTesting(
+            histories: histories, provider: .antigravity, snapshot: snapshot, referenceDate: self.now)
+        #expect(chart.visibleSeries == (newerPool ? ["antigravityGemini:0"] : ["weekly:10080"]))
+    }
+
     @Test
     func `quota observation histories survive disk round trip without adopting a cadence`() {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

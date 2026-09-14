@@ -279,7 +279,8 @@ API-equivalent token estimates, explicitly not subscription charges or Antigravi
 3.6/3.7/3.8 Flash use the published standard text API input/output/cache-read rates, including the 2027-01-01
 introductory-price cutoff ([Google pricing](https://ai.google.dev/gemini-api/docs/pricing), checked 2026-09-13).
 Claude models reuse the existing dated API pricing resolver; the explicit `-thinking` variant bills its separately
-recorded thinking tokens as output. Unknown models remain unpriced and retain their token counts. Estimated and
+recorded thinking tokens as output. Cache-write events without a recorded duration remain unpriced, including
+Claude writes whose five-minute versus one-hour TTL is unknown. Unknown models also retain their token counts. Estimated and
 unpriced request counts accompany priced subtotals, so missing prices never become free usage. Cache storage,
 subscription fees, and service-specific charges are excluded. These entry points do not expand the supported
 timestamp layouts described below.

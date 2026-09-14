@@ -33,6 +33,7 @@ struct AntigravityCLICostTests {
         #expect(text.contains("Partial API-rate estimate:") == includePriced)
         #expect(text.contains("Unpriced usage:") == !includePriced)
         #expect(text.contains("not Antigravity charges") == includePriced)
+        print("Synthetic Antigravity CLI coverage (includePriced=\(includePriced)):\n\(text)")
     }
 
     @Test

@@ -5,7 +5,15 @@ extension UsageStore {
     nonisolated static func antigravityHistoryUsesObservations(
         snapshot: UsageSnapshot?, histories: [PlanUtilizationSeriesHistory]) -> Bool
     {
-        if let snapshot { return !self.hasAntigravityQuotaSummary(snapshot) }
+        if let snapshot {
+            if snapshot.extraRateWindows?.contains(where: {
+                $0.id.hasPrefix("antigravity-quota-summary-") && $0.usageKnown
+                    && !$0.window.isSyntheticPlaceholder && $0.window.usedPercent.isFinite
+            }) == true { return false }
+            if !self.antigravityQuotaObservationSamples(snapshot: snapshot, capturedAt: snapshot.updatedAt).isEmpty {
+                return true
+            }
+        }
         // During startup/unavailability, use the most recently captured format; ties favor structured windows.
         // Both sets remain persisted. A stale observation must not hide newer structured history.
         let supported = histories.filter(\.hasSupportedCadence)
