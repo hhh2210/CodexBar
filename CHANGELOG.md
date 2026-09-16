@@ -4,6 +4,13 @@
 
 ### Fixed
 - Antigravity: surface the most authoritative attempted source's error when auto fails overall (app → CLI → IDE → OAuth) instead of the last failure, and add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export (part of #3673, related to #3146 and #3662).
+- DeepSeek: retain Chrome-only balances through transport failures only for the same live browser session, preserving timestamps and retry diagnostics without reusing another profile's balance (related to #3500). Thanks @jaxleezhang!
+- Claude: preserve explicit OAuth quota measurements and startup retry classification through localized network failures.
+- Claude: replace unusable `setup-token` recovery advice for missing usage scopes with sign-in and source-selection guidance (#3390). Thanks @sittinonsukhaya!
+- Cursor: retain app-session and stored-session usage and widget samples through repeated temporary network failures, keeping their original measurement time.
+- Vertex AI: recognize wrapped transport failures during token refresh and monitoring requests, preserving the last successful identity snapshot and bounded startup retries.
+- Codex and Vertex AI: suppress wrapped request cancellations before they count as failed refreshes or become visible outages.
+- Ollama: preserve API identity and network-error classification when key validation or model-list requests fail, without inventing quota windows.
 - Amp: restore independent Agent and Orb usage for Tier output using exact balances, and distinguish monthly allowances from shared credits (#3668). Thanks @jdblackstar!
 - Amp: anchor Tier reserve/deficit pacing to valid billing dates and display remaining Orb time in whole a1.small-equivalent hours without rounding the underlying usage (#3668). Thanks @jdblackstar!
 - Codex: retain usage and widget entries during localized network outages, keep their original update time, and classify wrapped transport errors correctly for startup retries and refresh hooks.
