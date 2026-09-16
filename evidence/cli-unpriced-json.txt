@@ -1,0 +1,54 @@
+[
+  {
+    "coverage" : {
+      "estimated" : 0,
+      "priced" : 0,
+      "unmetered" : 0,
+      "unpriced" : 2
+    },
+    "currencyCode" : "USD",
+    "daily" : [
+      {
+        "cacheCreationTokens" : 0,
+        "cacheReadTokens" : 100,
+        "date" : "2026-09-16",
+        "inputTokens" : 222,
+        "modelBreakdowns" : [
+          {
+            "modelName" : "fixture-unpriced-model",
+            "totalTokens" : 396
+          }
+        ],
+        "outputTokens" : 60,
+        "reasoningTokens" : 14,
+        "totalTokens" : 396
+      }
+    ],
+    "historyCoverageIsEstablished" : true,
+    "historyDays" : 1,
+    "last30DaysTokens" : 396,
+    "projects" : [
+
+    ],
+    "provenance" : "unknown",
+    "provider" : "antigravity",
+    "sessionTokens" : 396,
+    "source" : "local",
+    "totals" : {
+      "cacheCreationTokens" : 0,
+      "cacheReadTokens" : 100,
+      "coverage" : {
+        "estimated" : 0,
+        "priced" : 0,
+        "unmetered" : 0,
+        "unpriced" : 2
+      },
+      "inputTokens" : 222,
+      "outputTokens" : 60,
+      "provenance" : "unknown",
+      "reasoningTokens" : 14,
+      "totalTokens" : 396
+    },
+    "updatedAt" : "2026-09-16T04:41:18Z"
+  }
+]
