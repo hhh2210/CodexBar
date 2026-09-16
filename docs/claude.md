@@ -110,6 +110,7 @@ Admin API key setup:
   (`default_claude_max_5x` / `default_claude_max_20x`), it is surfaced in the label as "Max 5x" / "Max 20x".
 
 ## Web API (cookies)
+- Session quota warnings ignore a weekly quota promoted into the primary field when the five-hour payload is missing. Existing session warning history stays tied to its account, and weekly warnings continue independently.
 - Preferences → Providers → Claude → Cookie source (Automatic or Manual).
 - Manual mode accepts a `Cookie:` header from a claude.ai request.
 - Multi-account manual tokens: add entries to `~/.codexbar/config.json` (`tokenAccounts`) and set Claude cookies to
@@ -177,7 +178,10 @@ The accepted multi-account design in
   pending or failed switches show the requested account's details while the active marker stays source-owned.
   Expired or otherwise unavailable accounts remain inspectable without activation; selecting the active account
   returns to its card. If the adapter reports no active account, the menu says so instead of selecting the first row.
-  Buttons wrap into two rows above three accounts. Hide Personal Info uses stable `Account N` slot labels.
+  Buttons wrap into two rows above three accounts. Hide Personal Info uses stable `Account N` slot labels across
+  segmented buttons, native account cards, compact menu rows, and accessibility text, including unavailable accounts.
+  These numbers come from validated claude-swap slots and remain stable when accounts are reordered; aliases,
+  organization names, and email addresses stay hidden.
   Stacked shows one card per account (active account first, then numeric slot). With four or more
   accounts the stacked menu switches to a compact layout (`AccountMenuLayoutPlanner`): the active account keeps its full
   card, inactive accounts become one-line rows sorted by remaining headroom (most constrained first, red/amber below
@@ -237,6 +241,7 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
 ## CLI PTY (fallback)
 - Runs `claude` in a PTY session (`ClaudeCLISession`).
 - Default behavior: exit after each probe; Debug → "Keep CLI sessions alive" keeps it running between probes.
+- Probe launches pass `--settings '{"remoteControlAtStartup":false}'` to avoid registering empty Remote Control sessions in claude.ai/code and the mobile app. This process-local override leaves the user's saved settings unchanged; Claude's managed-settings policy still applies.
 - Probe working directory: `~/Library/Application Support/CodexBar/ClaudeProbe` with local Claude settings that disable
   deep-link URL handler registration during headless probes.
 - After transient probes exit, CodexBar removes Claude Code `.jsonl` session artifacts for that dedicated
@@ -277,7 +282,11 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
 - Parsing:
   - Native Claude logs parse lines with `type: "assistant"` and `message.usage`.
   - Uses per-model token counts (input, cache read/create, output).
-  - Deduplicates streaming chunks by `message.id + requestId` (usage is cumulative per chunk).
+  - Deduplicates cumulative streaming chunks by `message.id + requestId`. When `requestId` is absent,
+    exact, nonblank `sessionId + message.id` identifies repeated response snapshots. Distinct explicit request
+    IDs and distinct fallback sessions remain separate. Rows without sufficient identity are counted individually.
+    Within a file, the final complete cumulative chunk wins, including later appends. Copied records retain the
+    existing preference for parent and non-sidechain records.
   - pi and OMP sessions attribute `anthropic` assistant usage to Claude and bucket it by assistant-turn timestamp, so a
     single pi-compatible session can contribute to multiple models/days.
   - Matching assistant entry IDs within the same session are counted once across roots; distinct turns are retained.
@@ -285,6 +294,7 @@ Model-scoped weekly-window proof (synthetic data, no real accounts or credential
   - Native provider cache: `~/Library/Caches/CodexBar/cost-usage/claude-v6.json`
   - Report memo: `~/Library/Caches/CodexBar/cost-usage/claude-v6.report-memo.json` stores source stamps and the daily report across launches. It is reused only while transcript inventory, cache/pricing artifacts, requested window, and report-semantics revision still match.
   - The Claude/Vertex cache artifact retains source file identities independently of the shared Codex parser fingerprint. Replacing a transcript rebuilds its rows rather than merging an old prefix into a new suffix; genuine appends still use the saved parse offset. Older entries without identity are rebuilt once before reuse, including during the normal refresh debounce.
+  - Older Claude/Vertex native caches and report memos are rebuilt once from unchanged transcripts to apply the corrected response deduplication. Corrected reports remain eligible for memo reuse across launches.
   - pi-compatible session cache: `~/Library/Caches/CodexBar/cost-usage/pi-sessions-v8.json`
 
 ## Key files

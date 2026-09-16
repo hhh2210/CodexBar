@@ -21,6 +21,16 @@ run `agy` once and sign in. CodexBar keeps the signed-in `agy` local HTTPS serve
 after each refresh and stops it when idle, or reuses a signed-in `agy` you already have running
 without taking ownership of that process.
 
+For `agy` 1.2.2 and later, a failed legacy HTTPS fetch can fall back to
+`agy -p /usage --output-format json`. CodexBar checks that the same executable reports version 1.1.11
+or later before using print mode; [Google introduced non-interactive usage reports in 1.1.11](https://antigravity.google/changelog).
+It requires a successful `usage` command report with known,
+enabled quota buckets, bounds the command to 90 seconds and its output to 1 MiB, and terminates the command
+on cancellation. It runs in a private empty directory and does not send a model prompt or parse TUI output.
+The report contains no account or plan identity: explicit CLI mode remains authoritative, while Auto uses
+this fallback only without a selected token account or explicitly injected OAuth credentials. Successful
+HTTPS results retain their verified identity. Failed command diagnostics do not include raw stderr.
+
 Antigravity supports four usage data sources:
 
 1. The Antigravity 2.0 app's local `language_server` (preferred when the app is open).
@@ -55,7 +65,10 @@ when CodexBar has a selected/injected Google account or an existing shared crede
 `fetchAvailableModels` payload is only accepted after `retrieveUserQuota` echoes bucket fractions; this can be an
 availability-style fallback rather than the full Antigravity quota summary.
 When OAuth identifies the account but quota endpoints deny access, CodexBar shows `Limits not available` instead of an
-empty quota card.
+empty quota card. Auto also skips `agy` reports without account identity when a Google account is selected or injected,
+because it cannot verify that those quotas belong to that account. Settings explains this beside **Usage source**.
+To try the local app or `agy` account instead, select **Local API / agy CLI** (CLI: `--source cli`).
+That source may use a different signed-in account from the Google account selected in CodexBar; it does not verify a match.
 
 ## OAuth account switching
 
