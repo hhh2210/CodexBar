@@ -144,7 +144,7 @@ struct ClaudeSourcePlannerTests {
     }
 
     @Test
-    func `CLI resolver falls back to PATH when Claude CLI path override is invalid`() throws {
+    func `CLI resolver fails fast when Claude CLI path override is invalid`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -152,6 +152,9 @@ struct ClaudeSourcePlannerTests {
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: binaryURL)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binaryURL.path)
 
+        // A set-but-unusable override is authoritative: resolution fails instead
+        // of falling through to PATH, which could launch a real binary the
+        // override was meant to suppress (#3673 workstream 2).
         let resolved = ClaudeCLIResolver.resolvedBinaryPath(
             environment: [
                 "CLAUDE_CLI_PATH": "/definitely/missing/claude",
@@ -159,6 +162,6 @@ struct ClaudeSourcePlannerTests {
             ],
             loginPATH: nil)
 
-        #expect(resolved == binaryURL.path)
+        #expect(resolved == nil)
     }
 }

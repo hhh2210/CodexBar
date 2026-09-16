@@ -20,9 +20,11 @@ func resolveCodexExecutableForRPC(
     executable: String,
     captureLoginPATH: () -> [String]?) -> CodexExecutableResolution?
 {
-    if let override = environment["CODEX_CLI_PATH"],
-       FileManager.default.isExecutableFile(atPath: override)
-    {
+    if let override = environment["CODEX_CLI_PATH"] {
+        // A set-but-unusable override is authoritative: fail instead of falling
+        // through to ambient resolution, which would launch a real binary the
+        // override was meant to suppress.
+        guard FileManager.default.isExecutableFile(atPath: override) else { return nil }
         // Native overrides can launch directly. Script overrides can depend on a
         // login-shell PATH through `#!/usr/bin/env node` or helper commands.
         let loginPATH = executableIsScript(override) ? captureLoginPATH() : nil

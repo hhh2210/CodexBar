@@ -362,9 +362,12 @@ public enum BinaryLocator {
         home: String) -> String?
     {
         // swiftlint:enable function_parameter_count
-        // 1) Explicit override
-        if let override = env[overrideKey], fileManager.isExecutableFile(atPath: override) {
-            return override
+        // 1) Explicit override — authoritative when set. A non-usable override
+        // fails resolution outright instead of falling through to login-PATH or
+        // well-known paths: those would spawn the real binary the override was
+        // meant to suppress (e.g. an agy interactive login from a background fetch).
+        if let override = env[overrideKey] {
+            return fileManager.isExecutableFile(atPath: override) ? override : nil
         }
 
         // 2) Login-shell PATH (captured once per launch)
