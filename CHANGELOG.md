@@ -3,6 +3,7 @@
 ## 0.60.4 — Unreleased
 
 ### Fixed
+- Antigravity: surface the most authoritative attempted source's error when auto fails overall (app → CLI → IDE → OAuth) instead of the last failure, and add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export (part of #3673, related to #3146 and #3662).
 - Amp: restore independent Agent and Orb usage for Tier output using exact balances, and distinguish monthly allowances from shared credits (#3668). Thanks @jdblackstar!
 - Amp: anchor Tier reserve/deficit pacing to valid billing dates and display remaining Orb time in whole a1.small-equivalent hours without rounding the underlying usage (#3668). Thanks @jdblackstar!
 - Codex: retain usage and widget entries during localized network outages, keep their original update time, and classify wrapped transport errors correctly for startup retries and refresh hooks.

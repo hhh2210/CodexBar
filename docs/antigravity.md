@@ -189,7 +189,13 @@ Differences from the desktop local probe:
 - On macOS, external reuse matches the selected binary against the kernel executable path, not the spelling of
   `argv[0]`; a bare `agy` command can match, but a conflicting executable cannot. Platforms without that identity
   retain the absolute command-path check. User/account and managed-process exclusions are unchanged.
-- An unavailable or tokenless fallback preserves an earlier attempted-source failure, including CLI sign-in guidance, API errors, timeouts, and transport errors. A newly detected tokenless source can still replace an earlier not-running result. Successful fallbacks supply usage, and more specific later errors retain their normal precedence.
+- When every source fails, the surfaced error comes from the most authoritative source that was actually attempted
+  (app → `agy` CLI → IDE → OAuth): later, less-authoritative failures never overwrite an earlier source's real
+  failure. A not-running placeholder still yields to any later substantive error, and consecutive not-running
+  results refresh to the latest one. Diagnostics: `codexbar usage --provider antigravity --verbose` prints each
+  strategy's outcome, a failing auto refresh logs one per-source debug line, and `codexbar diagnose
+  --provider antigravity --pretty` exports per-attempt strategy IDs, outcomes (`succeeded`/`skipped`/`failed`),
+  and safe error categories.
 - Readiness is endpoint-based: CodexBar retries until one of the quota endpoints parses, because fresh `agy`
   processes can bind a port before the quota service is initialized.
 - App runtime uses a bounded warm session: `agy` is kept alive briefly after a refresh, then stopped on idle. CLI runtime

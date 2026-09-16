@@ -1059,13 +1059,75 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
         #expect(outcome.attempts.count == 2)
     }
 
-    @Test
-    func `specific later fallback error replaces signed out CLI error`() {
-        let result = AntigravityProviderDescriptor.resolveFallbackError(
-            AntigravityStatusProbeError.authenticationRequired,
-            AntigravityStatusProbeError.apiError("OAuth credentials expired"))
+    @Test(arguments: [
+        AntigravityStatusProbeError.authenticationRequired,
+        .apiError("OAuth credentials expired"),
+        .parseFailed("empty quota payload"),
+    ])
+    func `later fallback cannot replace the first authoritative failure`(oauthError: AntigravityStatusProbeError) {
+        let appError = AntigravityStatusProbeError.apiError("quota request rejected")
+        let result = AntigravityProviderDescriptor.resolveFallbackError(appError, oauthError)
 
-        #expect((result as? AntigravityStatusProbeError) == .apiError("OAuth credentials expired"))
+        #expect((result as? AntigravityStatusProbeError) == appError)
+    }
+
+    @Test
+    func `auto surfaces the most authoritative attempted source with per-source outcomes`() async {
+        let appError = AntigravityStatusProbeError.apiError("quota request rejected")
+        let pipeline = ProviderFetchPipeline(
+            resolveStrategies: { _ in
+                [
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.app-local",
+                        error: appError),
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.cli-https",
+                        error: .timedOut,
+                        available: false),
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.ide-local",
+                        error: .notRunning),
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.oauth",
+                        error: .authenticationRequired),
+                ]
+            },
+            resolveFallbackError: AntigravityProviderDescriptor.resolveFallbackError)
+
+        let outcome = await pipeline.fetch(context: self.makeFetchContext(), provider: .antigravity)
+
+        #expect(outcome.attempts.map(\.strategyID) == [
+            "antigravity.app-local", "antigravity.cli-https", "antigravity.ide-local", "antigravity.oauth",
+        ])
+        #expect(outcome.attempts.map(\.outcome) == [.failed, .skipped, .failed, .failed])
+        do {
+            _ = try outcome.result.get()
+            Issue.record("Expected the app-local failure to surface")
+        } catch {
+            #expect((error as? AntigravityStatusProbeError) == appError)
+        }
+    }
+
+    @Test
+    func `a successful later source suppresses error surfacing entirely`() async throws {
+        let pipeline = ProviderFetchPipeline(
+            resolveStrategies: { _ in
+                [
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.app-local",
+                        error: .apiError("quota request rejected")),
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.cli-https",
+                        error: nil),
+                ]
+            },
+            resolveFallbackError: AntigravityProviderDescriptor.resolveFallbackError)
+
+        let outcome = await pipeline.fetch(context: self.makeFetchContext(), provider: .antigravity)
+
+        let result = try outcome.result.get()
+        #expect(result.sourceLabel == "ide")
+        #expect(outcome.attempts.map(\.outcome) == [.failed, .succeeded])
     }
 }
 
@@ -1131,10 +1193,17 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
 private struct AntigravityFallbackFixtureStrategy: ProviderFetchStrategy {
     let id: String
     let error: AntigravityStatusProbeError?
+    let available: Bool
     let kind: ProviderFetchKind = .localProbe
 
+    init(id: String, error: AntigravityStatusProbeError?, available: Bool = true) {
+        self.id = id
+        self.error = error
+        self.available = available
+    }
+
     func isAvailable(_: ProviderFetchContext) async -> Bool {
-        true
+        self.available
     }
 
     func fetch(_: ProviderFetchContext) async throws -> ProviderFetchResult {

@@ -199,6 +199,16 @@ public struct ProviderFetchResult: Sendable {
 }
 
 public struct ProviderFetchAttempt: Sendable {
+    /// What happened to one strategy during a pipeline run.
+    public enum Outcome: String, Sendable {
+        /// The strategy produced the pipeline's result.
+        case succeeded
+        /// The strategy was skipped because `isAvailable` reported false.
+        case skipped
+        /// The strategy was attempted and threw.
+        case failed
+    }
+
     public let strategyID: String
     public let kind: ProviderFetchKind
     public let wasAvailable: Bool
@@ -209,6 +219,13 @@ public struct ProviderFetchAttempt: Sendable {
         self.kind = kind
         self.wasAvailable = wasAvailable
         self.errorDescription = errorDescription
+    }
+
+    public var outcome: Outcome {
+        if !self.wasAvailable {
+            return .skipped
+        }
+        return self.errorDescription == nil ? .succeeded : .failed
     }
 }
 
@@ -382,7 +399,36 @@ public struct ProviderFetchPipeline: Sendable {
         }
 
         let error = lastAvailableError ?? ProviderFetchError.noAvailableStrategy(provider)
+        Self.logPerSourceOutcomes(provider: provider, attempts: attempts, surfacedError: error)
         return ProviderFetchOutcome(result: .failure(error), attempts: attempts)
+    }
+
+    /// One debug line recording what every evaluated source did, so failure
+    /// reports can show per-source outcomes instead of a single masked error.
+    private static func logPerSourceOutcomes(
+        provider: UsageProvider,
+        attempts: [ProviderFetchAttempt],
+        surfacedError: Error)
+    {
+        guard !attempts.isEmpty else { return }
+        let outcomes = attempts.map { attempt in
+            let detail = switch attempt.outcome {
+            case .failed:
+                "failed: \(attempt.errorDescription ?? "unknown error")"
+            case .skipped:
+                "skipped: unavailable"
+            case .succeeded:
+                "succeeded"
+            }
+            return "\(attempt.strategyID) (\(ProviderDiagnosticFetchAttempt.kindLabel(attempt.kind))): \(detail)"
+        }.joined(separator: " -> ")
+        CodexBarLog.logger(LogCategories.provider(provider)).debug(
+            "Fetch strategies exhausted; surfacing most authoritative error",
+            metadata: [
+                "provider": provider.rawValue,
+                "error": surfacedError.localizedDescription,
+                "sources": outcomes,
+            ])
     }
 }
 

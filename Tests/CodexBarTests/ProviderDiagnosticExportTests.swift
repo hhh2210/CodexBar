@@ -424,6 +424,52 @@ struct ProviderDiagnosticExportTests {
     }
 
     @Test
+    func `fetch attempt carries strategy identity and outcome`() {
+        let failed = ProviderDiagnosticFetchAttempt(from: ProviderFetchAttempt(
+            strategyID: "antigravity.app-local",
+            kind: .localProbe,
+            wasAvailable: true,
+            errorDescription: "quota request rejected"))
+        #expect(failed.strategyID == "antigravity.app-local")
+        #expect(failed.kind == "local")
+        #expect(failed.outcome == "failed")
+
+        let skipped = ProviderDiagnosticFetchAttempt(from: ProviderFetchAttempt(
+            strategyID: "antigravity.cli-https",
+            kind: .cli,
+            wasAvailable: false,
+            errorDescription: nil))
+        #expect(skipped.strategyID == "antigravity.cli-https")
+        #expect(skipped.outcome == "skipped")
+
+        let succeeded = ProviderDiagnosticFetchAttempt(from: ProviderFetchAttempt(
+            strategyID: "antigravity.oauth",
+            kind: .oauth,
+            wasAvailable: true,
+            errorDescription: nil))
+        #expect(succeeded.strategyID == "antigravity.oauth")
+        #expect(succeeded.outcome == "succeeded")
+    }
+
+    @Test
+    func `legacy fetch attempt JSON derives outcome without strategy identity`() throws {
+        let legacyJSON = """
+        {"kind":"local","wasAvailable":true,"errorCategory":"api"}
+        """
+        let legacy = try JSONDecoder().decode(
+            ProviderDiagnosticFetchAttempt.self,
+            from: Data(legacyJSON.utf8))
+
+        #expect(legacy.strategyID == nil)
+        #expect(legacy.outcome == "failed")
+
+        let legacySkipped = try JSONDecoder().decode(
+            ProviderDiagnosticFetchAttempt.self,
+            from: Data(#"{"kind":"cli","wasAvailable":false,"errorCategory":null}"#.utf8))
+        #expect(legacySkipped.outcome == "skipped")
+    }
+
+    @Test
     func `missing api key setup errors map to auth before api`() {
         let category = ProviderDiagnosticFetchAttempt.errorCategoryLabel(
             "Azure OpenAI API key not configured. Set AZURE_OPENAI_API_KEY.")
