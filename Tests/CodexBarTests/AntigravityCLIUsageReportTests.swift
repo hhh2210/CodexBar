@@ -136,7 +136,7 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
     }
 
     @Test
-    func `selected and injected auto accounts never use identity free print`() async {
+    func `selected and injected auto accounts exclude identity free print visibly`() async {
         let injectedKey = AntigravityOAuthCredentialsStore.environmentCredentialsKey
         let contexts = [
             self.makeFetchContext(selectedTokenAccountID: UUID(), env: self.accountEnv(email: "selected@example.com")),
@@ -145,7 +145,9 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
             self.makeFetchContext(env: [injectedKey: ""]),
         ]
         for context in contexts {
-            await #expect(throws: AntigravityStatusProbeError.timedOut) {
+            await #expect(throws: AntigravityStatusProbeError.identityFreeReportExcluded(
+                underlyingDescription: "Antigravity quota request timed out."))
+            {
                 try await AntigravityCLIHTTPSFetchStrategy.fetchWithReportFallback(
                     context: context,
                     legacyFetch: { throw AntigravityStatusProbeError.timedOut },
@@ -154,6 +156,45 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
                         throw AntigravityStatusProbeError.notRunning
                     })
             }
+        }
+    }
+
+    @Test
+    func `excluded identity free print keeps the underlying failure and names the skip`() async {
+        let context = self.makeFetchContext(
+            selectedTokenAccountID: UUID(),
+            env: self.accountEnv(email: "s@example.com"))
+        do {
+            _ = try await AntigravityCLIHTTPSFetchStrategy.fetchWithReportFallback(
+                context: context,
+                legacyFetch: { throw AntigravityStatusProbeError.apiError("HTTP 500") },
+                reportFetch: {
+                    Issue.record("Print cannot prove the requested OAuth account")
+                    throw AntigravityStatusProbeError.notRunning
+                })
+            Issue.record("The excluded report corner must throw")
+        } catch let error as AntigravityStatusProbeError {
+            let description = error.errorDescription ?? ""
+            #expect(description.contains("HTTP 500"))
+            #expect(description.contains("Identity-free CLI usage report skipped"))
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test
+    func `not running legacy failure stays a placeholder when print is excluded`() async {
+        let context = self.makeFetchContext(
+            selectedTokenAccountID: UUID(),
+            env: self.accountEnv(email: "s@example.com"))
+        await #expect(throws: AntigravityStatusProbeError.notRunning) {
+            try await AntigravityCLIHTTPSFetchStrategy.fetchWithReportFallback(
+                context: context,
+                legacyFetch: { throw AntigravityStatusProbeError.notRunning },
+                reportFetch: {
+                    Issue.record("Print cannot prove the requested OAuth account")
+                    throw AntigravityStatusProbeError.timedOut
+                })
         }
     }
 
