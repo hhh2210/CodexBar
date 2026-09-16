@@ -169,7 +169,8 @@ extension CodexBarCLI {
         return "Antigravity auto source outcomes: " + parts.joined(separator: " -> ")
     }
 
-    /// Provider-specific by design: shortens Antigravity strategy IDs to their source names (app/cli/ide/oauth/offline).
+    /// Provider-specific by design: shortens Antigravity strategy IDs to their
+    /// source names (app/cli/ide/oauth/offline).
     private static func antigravitySourceShortLabel(_ strategyID: String) -> String {
         guard strategyID.hasPrefix("antigravity.") else { return strategyID }
         let short = String(strategyID.dropFirst("antigravity.".count))
