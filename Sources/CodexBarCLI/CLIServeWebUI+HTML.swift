@@ -774,14 +774,19 @@ extension CLIServeWebUI {
         function renderWindow(window) {
           const item = node("div", "window");
           const head = node("div", "window-head");
+          const showUsed = Boolean(state.snapshot && state.snapshot.host && state.snapshot.host.usageBarsShowUsed);
+          const pct = showUsed
+            ? window.usedPercent
+            : (window.remainingPercent ?? (100 - finiteNumber(window.usedPercent)));
+          const suffix = showUsed ? "used" : "left";
           head.append(node("span", "window-label",
-            `${window.label || "Usage"} · ${percent(window.usedPercent)} used`));
+            `${window.label || "Usage"} · ${percent(pct)} ${suffix}`));
           const reset = resetTime(window.resetAt);
           if (reset) head.append(node("span", "window-time", reset));
 
           const track = node("div", "track");
           const fill = node("div", "fill");
-          const width = Math.min(100, Math.max(0, finiteNumber(window.usedPercent)));
+          const width = Math.min(100, Math.max(0, finiteNumber(pct)));
           fill.style.width = `${width}%`;
           track.setAttribute("role", "progressbar");
           track.setAttribute("aria-label", "Usage window");
@@ -794,12 +799,11 @@ extension CLIServeWebUI {
         }
 
         function renderCostChart(history) {
-          // Daily spend as an inline SVG bar chart: one thin accent bar per day,
-          // 2px gaps, no dual axes, native tooltips per bar. Height is scaled to
-          // the busiest day; a zero-spend range renders nothing.
+          // Keep excluded requests visible without turning unavailable costs into zero.
           const days = history.slice(-30);
-          const max = Math.max(...days.map(day => day.cost), 0);
-          if (!(max > 0) || days.length < 2) return null;
+          const max = Math.max(...days.map(day => day.cost ?? 0), 0);
+          const incomplete = days.reduce((sum, day) => sum + (day.incompleteRequestCount || 0), 0);
+          if ((!(max > 0) && !incomplete) || !days.length) return null;
 
           const width = 100;
           const height = 36;
@@ -811,10 +815,13 @@ extension CLIServeWebUI {
           svg.setAttribute("preserveAspectRatio", "none");
           svg.classList.add("chart");
           svg.setAttribute("role", "img");
-          svg.setAttribute("aria-label", `Daily spend, last ${days.length} days`);
+          svg.setAttribute("aria-label",
+            `Daily spend, last ${days.length} days${incomplete ? ", incomplete usage" : ""}`);
 
           days.forEach((day, index) => {
-            const barHeight = Math.max((day.cost / max) * height, day.cost > 0 ? 1 : 0);
+            const excluded = day.incompleteRequestCount > 0;
+            const barHeight = Math.max(max > 0 ? ((day.cost ?? 0) / max) * height : 0,
+              day.cost > 0 ? 1 : excluded ? 2 : 0);
             const rect = document.createElementNS(svgNS, "rect");
             rect.setAttribute("x", String(index * (barWidth + gap)));
             rect.setAttribute("y", String(height - barHeight));
@@ -822,7 +829,14 @@ extension CLIServeWebUI {
             rect.setAttribute("height", String(barHeight));
             rect.setAttribute("rx", "0.5");
             const title = document.createElementNS(svgNS, "title");
-            title.textContent = `${day.date} · ${dollars(day.cost)}`;
+            title.textContent = `${day.date} · ${day.cost == null ? "—" : dollars(day.cost)}`
+              + (excluded ? ` · Incomplete: ${day.incompleteRequestCount} excluded requests` : "");
+            if (excluded) {
+              rect.setAttribute("fill-opacity", "0.45");
+              rect.setAttribute("stroke", "currentColor");
+              rect.setAttribute("stroke-dasharray", "3 3");
+              rect.setAttribute("vector-effect", "non-scaling-stroke");
+            }
             rect.append(title);
             svg.append(rect);
           });
@@ -831,7 +845,7 @@ extension CLIServeWebUI {
           wrap.append(svg);
           const caption = node("div", "chart-caption");
           caption.append(node("span", "", `Daily spend · ${days.length}d`));
-          caption.append(node("span", "", `peak ${dollars(max)}`));
+          caption.append(node("span", "", incomplete ? "Incomplete usage" : `peak ${dollars(max)}`));
           wrap.append(caption);
           return wrap;
         }
@@ -964,9 +978,16 @@ extension CLIServeWebUI {
         }
 
         function appendCostSummary(card, provider, metrics = node("div", "metrics")) {
-          for (const [label, key] of [["Today", "todayUSD"], ["Last 30 days", "last30DaysUSD"]]) {
+          for (const [label, key, countKey] of [
+            ["Today", "todayUSD", "todayIncompleteRequestCount"],
+            ["Last 30 days", "last30DaysUSD", "last30DaysIncompleteRequestCount"]
+          ]) {
             const value = provider.cost?.[key];
-            if (value !== null && value !== undefined) metrics.append(metric(label, dollars(value)));
+            const incomplete = provider.cost?.[countKey] > 0;
+            if (value != null || incomplete) {
+              const amount = value == null ? "—" : dollars(value);
+              metrics.append(metric(label, amount + (incomplete ? " · Incomplete" : "")));
+            }
           }
           if (metrics.childElementCount) card.append(metrics);
 
@@ -1194,10 +1215,12 @@ extension CLIServeWebUI {
             const histories = {};
             for (const row of rows) {
               if (!row || typeof row.provider !== "string") continue;
-              if (!Array.isArray(row.daily) || row.daily.length < 2) continue;
+              if (!Array.isArray(row.daily) || !row.daily.length) continue;
               histories[row.provider] = row.daily
                 .filter(day => day && typeof day.date === "string")
-                .map(day => ({ date: day.date, cost: finiteNumber(day.totalCost) }));
+                .map(day => ({ date: day.date,
+                  cost: typeof day.totalCost === "number" && Number.isFinite(day.totalCost) ? day.totalCost : null,
+                  incompleteRequestCount: Math.max(0, finiteNumber(day.incompleteRequestCount)) }));
             }
             state.costHistories = histories;
           } catch (error) {
