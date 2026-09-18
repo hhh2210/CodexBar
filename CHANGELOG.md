@@ -3,7 +3,7 @@
 ## 0.60.6 — Unreleased
 
 ### Fixed
-- Antigravity: make binary path overrides authoritative — a set `*_CLI_PATH` override that is not an executable fails resolution instead of falling through to PATH and well-known locations, which could spawn a real CLI's interactive login from a background fetch (part of #3673).
+- Antigravity: make `ANTIGRAVITY_CLI_PATH` authoritative — a set override that is not an executable fails resolution instead of falling through to PATH and well-known locations, which could spawn a real CLI's interactive login from a background fetch (part of #3673).
 - Antigravity: show the identity-free `agy -p /usage` fallback's exclusion in per-source outcomes when a Google account is selected or OAuth credentials are injected, instead of silently dropping it (part of #3673).
 - Antigravity: stop the account-mismatch error from claiming the selected account's OAuth data is being used when the OAuth source may also have failed (part of #3673).
 - Antigravity: surface the most authoritative attempted source's error when auto fails overall (app → CLI → IDE → OAuth) instead of the last failure, and add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export (part of #3673, related to #3146 and #3662).

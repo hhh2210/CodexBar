@@ -17,10 +17,10 @@ signal and never enables or falls back to Antigravity automatically.
 
 To use the `agy` CLI source without keeping the desktop app open, install the CLI first
 (`brew install --cask antigravity-cli`; use `ANTIGRAVITY_CLI_PATH` when it is not on PATH), then
-run `agy` once and sign in. A set override that is not an executable file is authoritative: CLI
+run `agy` once and sign in. A set `ANTIGRAVITY_CLI_PATH` that is not an executable file is authoritative: CLI
 resolution fails instead of falling back to PATH, so pointing the override at a nonexistent path
-reliably disables every `agy` spawn. CodexBar keeps the signed-in `agy` local HTTPS server alive briefly
-after each refresh and stops it when idle, or reuses a signed-in `agy` you already have running
+disables `agy` launches during usage fetching. Other providers retain their existing override resolution.
+CodexBar keeps the signed-in `agy` local HTTPS server alive briefly after each refresh and stops it when idle, or reuses a signed-in `agy` you already have running
 without taking ownership of that process.
 
 `agy` 1.2.2 and later reject tokenless local requests with `401 missing CSRF token` on both ports and do not
@@ -37,6 +37,8 @@ on cancellation. It runs in a private empty directory and does not send a model 
 The report contains no account or plan identity: explicit CLI mode remains authoritative, while Auto uses
 this fallback only without a selected token account or explicitly injected OAuth credentials — when Auto
 excludes it, the CLI source's recorded failure names the skip instead of silently dropping the report.
+Redacted diagnose exports and debug logs identify this as `identity_free_report_excluded` without
+including the underlying error text.
 Successful HTTPS results retain their verified identity. Failed command diagnostics do not include raw stderr.
 
 Antigravity supports four usage data sources:

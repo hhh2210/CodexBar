@@ -3,16 +3,20 @@ import Testing
 @testable import CodexBarCore
 
 struct AntigravityBinaryLocatorTests {
-    @Test(arguments: ["/nonexistent-agy-guard", "", "agy"])
+    @Test(arguments: ["/nonexistent-agy-guard", "", "   ", "agy"])
     func `unusable env override fails without ambient fallback`(override: String) {
         // The ambient binary exists on every lookup channel (login PATH, env
         // PATH, well-known install paths); a set-but-unusable override must
         // still fail resolution so a background fetch can never spawn it.
         let ambient = "/opt/homebrew/bin/agy"
         let fileManager = AntigravityLocatorMockFileManager(executables: [ambient])
-        let commandV: (String, String?, TimeInterval, FileManager) -> String? = { _, _, _, _ in ambient }
+        let commandV: (String, String?, TimeInterval, FileManager) -> String? = { _, _, _, _ in
+            Issue.record("An unusable override must not run shell lookup")
+            return ambient
+        }
         let aliasResolver: (String, String?, TimeInterval, FileManager, String) -> String? = { _, _, _, _, _ in
-            ambient
+            Issue.record("An unusable override must not run alias lookup")
+            return ambient
         }
 
         let resolved = BinaryLocator.resolveAntigravityBinary(
@@ -30,8 +34,14 @@ struct AntigravityBinaryLocatorTests {
     func `usable env override is used without other lookups`() {
         let overridePath = "/custom/bin/agy"
         let fileManager = AntigravityLocatorMockFileManager(executables: [overridePath])
-        let commandV: (String, String?, TimeInterval, FileManager) -> String? = { _, _, _, _ in nil }
-        let aliasResolver: (String, String?, TimeInterval, FileManager, String) -> String? = { _, _, _, _, _ in nil }
+        let commandV: (String, String?, TimeInterval, FileManager) -> String? = { _, _, _, _ in
+            Issue.record("A usable override must not run shell lookup")
+            return nil
+        }
+        let aliasResolver: (String, String?, TimeInterval, FileManager, String) -> String? = { _, _, _, _, _ in
+            Issue.record("A usable override must not run alias lookup")
+            return nil
+        }
 
         let resolved = BinaryLocator.resolveAntigravityBinary(
             env: ["ANTIGRAVITY_CLI_PATH": overridePath],

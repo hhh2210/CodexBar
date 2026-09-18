@@ -126,7 +126,12 @@ public enum BinaryLocator {
         fileManager: FileManager = .default,
         home: String = NSHomeDirectory()) -> String?
     {
-        self.resolveBinary(
+        // Antigravity background refreshes must not discover and launch another
+        // agy when the configured override deliberately disables the CLI source.
+        if let override = env["ANTIGRAVITY_CLI_PATH"] {
+            return fileManager.isExecutableFile(atPath: override) ? override : nil
+        }
+        return self.resolveBinary(
             name: "agy",
             overrideKey: "ANTIGRAVITY_CLI_PATH",
             env: env,
@@ -362,12 +367,9 @@ public enum BinaryLocator {
         home: String) -> String?
     {
         // swiftlint:enable function_parameter_count
-        // 1) Explicit override — authoritative when set. A non-usable override
-        // fails resolution outright instead of falling through to login-PATH or
-        // well-known paths: those would spawn the real binary the override was
-        // meant to suppress (e.g. an agy interactive login from a background fetch).
-        if let override = env[overrideKey] {
-            return fileManager.isExecutableFile(atPath: override) ? override : nil
+        // 1) Explicit override
+        if let override = env[overrideKey], fileManager.isExecutableFile(atPath: override) {
+            return override
         }
 
         // 2) Login-shell PATH (captured once per launch)

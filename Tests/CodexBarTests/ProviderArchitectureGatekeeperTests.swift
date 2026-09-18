@@ -3683,7 +3683,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact error branch renders the MiniMax-specific endpoint validation failure."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/PathEnvironment.swift",
-            line: 564,
+            line: 566,
             anchor: ".appendingPathComponent(\"codex\")",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 2,
