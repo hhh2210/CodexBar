@@ -163,7 +163,7 @@ private enum TerminalFixtureFailure: LocalizedError {
     case first, terminal, resolved
 
     var errorDescription: String? {
-        "HTTP failure: sensitive-payload"
+        "HTTP \(self) failure: sensitive-payload"
     }
 }
 
