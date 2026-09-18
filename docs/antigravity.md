@@ -298,7 +298,8 @@ The cost endpoint and dashboard also include it when Antigravity is selected. Su
 API-equivalent token estimates, explicitly not subscription charges or Antigravity credit deductions. Gemini
 3.6/3.7/3.8 Flash use the published standard text API input/output/cache-read rates, including the 2027-01-01
 introductory-price cutoff ([Google pricing](https://ai.google.dev/gemini-api/docs/pricing), checked 2026-09-13).
-Claude models reuse the existing dated API pricing resolver; the explicit `-thinking` variant bills its separately
+Claude models reuse the existing dated API pricing resolver, normalizing same-model dotted version spellings
+such as `claude-opus-4.6` without changing the recorded model ID. The explicit `-thinking` variant bills its separately
 recorded thinking tokens as output. Cache-write events without a recorded duration remain unpriced, including
 Claude writes whose five-minute versus one-hour TTL is unknown. Unknown models also retain their token counts. Estimated and
 unpriced request counts accompany priced subtotals, so missing prices never become free usage. Cache storage,
@@ -307,6 +308,8 @@ timestamp layouts described below.
 
 Legacy Gemini/Claude-GPT pool responses often omit the reset duration. Their plan history therefore stores
 separate, account-scoped quota observations at actual capture times, with zero reserved as an unknown cadence.
+Each observation hour retains its latest capture, including decreases without reset metadata. Summary responses
+with usable balances but no recognized session/weekly cadence use the same observation path.
 It does not infer a five-hour duration from reset proximity, reuse the older session/weekly histories as family
 history, or synthesize blank reset periods. Structured session/weekly quota summaries retain their existing
 history and session-equivalent forecast path.

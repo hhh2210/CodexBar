@@ -44,18 +44,18 @@ struct AntigravityLocalPricingTests {
         #expect(entry.pricedRequestCount == 0)
     }
 
-    @Test
-    func `Claude thinking prices reasoning as output and preserves the recorded model`() throws {
+    @Test(arguments: ["claude-opus-4-6-thinking", "claude-opus-4.6-thinking", "claude-opus-4.6"])
+    func `Claude spellings price reasoning as output and preserve the recorded model`(model: String) throws {
         let fixture = try AntigravityLocalFixture()
         try fixture.database(blobs: [AntigravityLocalFixture.blob(
-            model: "claude-opus-4-6-thinking", system: 100, input: 900, output: 20, cacheRead: 2000, reasoning: 80)])
+            model: model, system: 100, input: 900, output: 20, cacheRead: 2000, reasoning: 80)])
         let entry = try #require(fixture.report().report.data.first)
         let expected = (1000 * 5.0 + 2000 * 0.5 + 100 * 25.0) / 1_000_000
         #expect(try abs(#require(entry.costUSD) - expected) < 1e-12)
         #expect(entry.totalTokens == 3100)
         #expect(entry.estimatedRequestCount == 1)
         #expect(entry.unpricedRequestCount == 0)
-        #expect(entry.modelBreakdowns?.first?.modelName == "claude-opus-4-6-thinking")
+        #expect(entry.modelBreakdowns?.first?.modelName == model)
     }
 
     @Test(arguments: ["gemini-3.5-flash-mid", "gemini-3-flash-agent"])

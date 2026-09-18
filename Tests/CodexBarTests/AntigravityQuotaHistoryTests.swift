@@ -1,7 +1,7 @@
-import CodexBarCore
 import Foundation
 import Testing
 @testable import CodexBar
+@testable import CodexBarCore
 
 struct AntigravityQuotaHistoryTests {
     private let now = Date(timeIntervalSince1970: 1_789_300_000)
@@ -26,6 +26,118 @@ struct AntigravityQuotaHistoryTests {
         #expect(Set(histories.map(\.name)) == [.antigravityGemini, .antigravityClaudeGPT])
         #expect(histories.first(where: { $0.name == .antigravityGemini })?.entries.last?.usedPercent == 82)
         #expect(!histories.contains { $0.name == .session || $0.name == .weekly })
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func `same hour decreases retain latest observation and format freshness`(hasReset: Bool) async throws {
+        let store = UsageStorePlanUtilizationTests.makeStore()
+        let hour = Date(timeIntervalSince1970: floor(self.now.timeIntervalSince1970 / 3600) * 3600)
+        // Include a delayed older response after the replenishment to protect capture ordering too.
+        for (minute, used) in [(5.0, 80.0), (20.0, 20.0), (10.0, 90.0)] {
+            let capture = hour.addingTimeInterval(minute * 60)
+            await store.recordPlanUtilizationHistorySample(
+                provider: .antigravity,
+                snapshot: UsageSnapshot(
+                    primary: .init(
+                        usedPercent: used,
+                        windowMinutes: nil,
+                        resetsAt: hasReset ? self.now : nil,
+                        resetDescription: nil),
+                    secondary: nil,
+                    updatedAt: capture),
+                now: capture)
+        }
+        let histories = store.planUtilizationHistory(for: .antigravity)
+        let observation = try #require(histories.first { $0.name == .antigravityGemini })
+        #expect(observation.entries.count == 1)
+        #expect(observation.entries.last?.usedPercent == 20)
+        #expect(observation.latestCapturedAt == hour.addingTimeInterval(20 * 60))
+        let structured = PlanUtilizationSeriesHistory(
+            name: .weekly,
+            windowMinutes: 10080,
+            entries: [.init(capturedAt: hour.addingTimeInterval(15 * 60), usedPercent: 30, resetsAt: nil)])
+        #expect(UsageStore.antigravityHistoryUsesObservations(snapshot: nil, histories: histories + [structured]))
+        let chart = PlanUtilizationHistoryChartMenuView._modelSnapshotForTesting(
+            histories: histories + [structured], provider: .antigravity, snapshot: nil, referenceDate: self.now)
+        #expect(chart.usedPercents == [20])
+    }
+
+    @MainActor
+    @Test(arguments: ["Custom pool", ""])
+    func `summary balances with unknown cadence survive parsing recording and chart selection`(cadence: String)
+        async throws
+    {
+        let status = AntigravityStatusSnapshot(
+            quotaSummary: AntigravityQuotaSummary(description: nil, groups: [
+                AntigravityQuotaSummaryGroup(displayName: "Gemini", description: nil, buckets: [
+                    AntigravityQuotaSummaryBucket(
+                        bucketId: "gemini-custom",
+                        displayName: cadence,
+                        remainingFraction: 0.25,
+                        resetDescription: nil,
+                        disabled: false),
+                ]),
+                AntigravityQuotaSummaryGroup(displayName: "Claude and GPT", description: nil, buckets: [
+                    AntigravityQuotaSummaryBucket(
+                        bucketId: "claude-custom",
+                        displayName: cadence,
+                        remainingFraction: 0.5,
+                        resetDescription: nil,
+                        disabled: false),
+                ]),
+            ]),
+            accountEmail: nil,
+            accountPlan: nil)
+        let snapshot = try status.toUsageSnapshot()
+        #expect(snapshot.primary?.windowMinutes == nil)
+        let store = UsageStorePlanUtilizationTests.makeStore()
+        await store.recordPlanUtilizationHistorySample(provider: .antigravity, snapshot: snapshot, now: self.now)
+        let histories = store.planUtilizationHistory(for: .antigravity)
+        #expect(histories.first { $0.name == .antigravityGemini }?.entries.last?.usedPercent == 75)
+        #expect(histories.first { $0.name == .antigravityClaudeGPT }?.entries.last?.usedPercent == 50)
+        let staleStructured = PlanUtilizationSeriesHistory(
+            name: .weekly,
+            windowMinutes: 10080,
+            entries: [.init(capturedAt: self.now.addingTimeInterval(-3600), usedPercent: 10, resetsAt: nil)])
+        let chart = PlanUtilizationHistoryChartMenuView._modelSnapshotForTesting(
+            histories: histories + [staleStructured],
+            provider: .antigravity,
+            snapshot: snapshot,
+            referenceDate: self.now)
+        #expect(chart.selectedSeries == "antigravityGemini:0")
+        #expect(chart.usedPercents == [75])
+    }
+
+    @MainActor
+    @Test
+    func `adopting unscoped observations preserves latest balance over account hourly peak`() async throws {
+        let store = UsageStorePlanUtilizationTests.makeStore()
+        let account = ProviderTokenAccount(
+            id: UUID(), label: "Fixture", token: "fixture-only", addedAt: 0, lastUsed: nil)
+        let key = try #require(UsageStore._planUtilizationTokenAccountKeyForTesting(
+            provider: .antigravity, account: account))
+        let hour = Date(timeIntervalSince1970: floor(self.now.timeIntervalSince1970 / 3600) * 3600)
+        func history(minute: Double, used: Double) -> PlanUtilizationSeriesHistory {
+            .init(name: .antigravityGemini, windowMinutes: 0, entries: [
+                .init(capturedAt: hour.addingTimeInterval(minute * 60), usedPercent: used, resetsAt: nil),
+            ])
+        }
+        var buckets = PlanUtilizationHistoryBuckets()
+        buckets.setHistories([history(minute: 5, used: 80)], for: key)
+        buckets.setHistories([history(minute: 20, used: 20)], for: nil)
+        store.planUtilizationHistory[.antigravity] = buckets
+        await store.recordPlanUtilizationHistorySample(
+            provider: .antigravity,
+            snapshot: UsageSnapshot(
+                primary: nil,
+                secondary: .init(usedPercent: 10, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+                updatedAt: self.now),
+            account: account,
+            now: self.now)
+        let adopted = try #require(store.planUtilizationHistory[.antigravity]?.histories(for: key)
+            .first { $0.name == .antigravityGemini })
+        #expect(adopted.entries == history(minute: 20, used: 20).entries)
     }
 
     @Test

@@ -2,14 +2,20 @@ import CodexBarCore
 import Foundation
 
 extension UsageStore {
+    nonisolated static func latestObservationHourEntries(
+        existingHourEntries: [PlanUtilizationHistoryEntry],
+        incomingEntry: PlanUtilizationHistoryEntry) -> [PlanUtilizationHistoryEntry]
+    {
+        // A cadence-less balance may fall without reset metadata; retain its latest value and capture time.
+        let latest = existingHourEntries.last
+        return [latest.map { $0.capturedAt > incomingEntry.capturedAt ? $0 : incomingEntry } ?? incomingEntry]
+    }
+
     nonisolated static func antigravityHistoryUsesObservations(
         snapshot: UsageSnapshot?, histories: [PlanUtilizationSeriesHistory]) -> Bool
     {
         if let snapshot {
-            if snapshot.extraRateWindows?.contains(where: {
-                $0.id.hasPrefix("antigravity-quota-summary-") && $0.usageKnown
-                    && !$0.window.isSyntheticPlaceholder && $0.window.usedPercent.isFinite
-            }) == true { return false }
+            if self.hasSupportedAntigravityQuotaSummary(snapshot) { return false }
             if !self.antigravityQuotaObservationSamples(snapshot: snapshot, capturedAt: snapshot.updatedAt).isEmpty {
                 return true
             }
@@ -26,7 +32,7 @@ extension UsageStore {
         snapshot: UsageSnapshot,
         capturedAt: Date) -> [PlanUtilizationSeriesSample]
     {
-        guard !self.hasAntigravityQuotaSummary(snapshot) else { return [] }
+        guard !self.hasSupportedAntigravityQuotaSummary(snapshot) else { return [] }
         let lanes: [(PlanUtilizationSeriesName, RateWindow?)] = [
             (.antigravityGemini, snapshot.primary),
             (.antigravityClaudeGPT, snapshot.secondary),
@@ -43,7 +49,11 @@ extension UsageStore {
         }
     }
 
-    nonisolated static func hasAntigravityQuotaSummary(_ snapshot: UsageSnapshot) -> Bool {
-        snapshot.extraRateWindows?.contains { $0.id.hasPrefix("antigravity-quota-summary-") } == true
+    private nonisolated static func hasSupportedAntigravityQuotaSummary(_ snapshot: UsageSnapshot) -> Bool {
+        snapshot.extraRateWindows?.contains {
+            $0.id.hasPrefix("antigravity-quota-summary-") && $0.usageKnown
+                && !$0.window.isSyntheticPlaceholder && $0.window.usedPercent.isFinite
+                && [self.sessionWindowMinutes, self.weeklyWindowMinutes].contains($0.window.windowMinutes ?? 0)
+        } == true
     }
 }

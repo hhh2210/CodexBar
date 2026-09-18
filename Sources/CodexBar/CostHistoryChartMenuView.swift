@@ -1108,6 +1108,7 @@ extension CostHistoryChartMenuView {
         let historyCoverageIsEstablished: Bool
         let windowLabel: String?
         let totalCostBitPattern: UInt64?
+        let coverageDisclaimer: String?
         let hasDailyEntries: Bool
         let daily: [VisibleDailyFingerprint]
         let projects: [VisibleProjectFingerprint]
@@ -1177,6 +1178,8 @@ extension CostHistoryChartMenuView {
             historyCoverageIsEstablished: snapshot.historyCoverageIsEstablished,
             windowLabel: snapshot.historyLabel,
             totalCostBitPattern: snapshot.last30DaysCostUSD.map(\.bitPattern),
+            coverageDisclaimer: self.coverageDisclaimer(
+                provider: provider, daily: snapshot.daily, totalCostUSD: snapshot.last30DaysCostUSD),
             hasDailyEntries: !snapshot.daily.isEmpty,
             daily: snapshot.daily
                 .filter { entry in

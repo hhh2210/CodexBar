@@ -11,7 +11,8 @@ enum AntigravityLocalPricing {
         let date = Date(timeIntervalSince1970: Double(timestamp) / 1000)
         let model = model.lowercased()
         if model.hasPrefix("claude-") {
-            let apiModel = model.hasSuffix("-thinking") ? String(model.dropLast("-thinking".count)) : model
+            let baseModel = model.hasSuffix("-thinking") ? String(model.dropLast("-thinking".count)) : model
+            let apiModel = baseModel.replacingOccurrences(of: ".", with: "-")
             return CostUsagePricing.claudeCostUSD(
                 model: apiModel,
                 inputTokens: event.input,
