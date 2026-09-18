@@ -798,14 +798,12 @@ public enum AntigravityStatusProbeError: LocalizedError, Sendable, Equatable {
 
     private static func accountMismatchDescription(expected: String?, found: String?) -> String {
         let selected = expected ?? "the selected account"
-        // State the rejection and the data-source policy without promising that OAuth succeeded:
-        // in the all-failed corner this error is surfaced while the OAuth source has also failed.
         if let found {
             return "Antigravity local session is signed in as \(found), not \(selected); "
-                + "only the OAuth source can report the selected account's quota."
+                + "local usage cannot be used for the selected account."
         }
         return "Antigravity local session did not report an account matching \(selected); "
-            + "only the OAuth source can report the selected account's quota."
+            + "local usage cannot be used for the selected account."
     }
 
     private static func portDetectionDescription(_ message: String) -> String {

@@ -1070,15 +1070,15 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
         .apiError("OAuth credentials expired"),
         .parseFailed("empty quota payload"),
     ])
-    func `later fallback cannot replace the first authoritative failure`(oauthError: AntigravityStatusProbeError) {
+    func `later substantive fallback retains its existing precedence`(oauthError: AntigravityStatusProbeError) {
         let appError = AntigravityStatusProbeError.apiError("quota request rejected")
         let result = AntigravityProviderDescriptor.resolveFallbackError(appError, oauthError)
 
-        #expect((result as? AntigravityStatusProbeError) == appError)
+        #expect((result as? AntigravityStatusProbeError) == oauthError)
     }
 
     @Test
-    func `auto surfaces the most authoritative attempted source with per-source outcomes`() async {
+    func `auto keeps later substantive error and every source outcome`() async {
         let appError = AntigravityStatusProbeError.apiError("quota request rejected")
         let pipeline = ProviderFetchPipeline(
             resolveStrategies: { _ in
@@ -1108,10 +1108,37 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
         #expect(outcome.attempts.map(\.outcome) == [.failed, .skipped, .failed, .failed])
         do {
             _ = try outcome.result.get()
-            Issue.record("Expected the app-local failure to surface")
+            Issue.record("Expected the later OAuth failure to surface")
         } catch {
-            #expect((error as? AntigravityStatusProbeError) == appError)
+            #expect((error as? AntigravityStatusProbeError) == .authenticationRequired)
         }
+    }
+
+    @Test(arguments: [false, true])
+    func `mismatch followed by OAuth failure never claims successful fallback`(allowsFallback: Bool) async {
+        let mismatch = AntigravityStatusProbeError.accountMismatch(
+            expected: "selected@example.com", found: "other@example.com")
+        let oauthError = AntigravityStatusProbeError.apiError("OAuth credentials expired")
+        let pipeline = ProviderFetchPipeline(
+            resolveStrategies: { _ in
+                [
+                    AntigravityFallbackFixtureStrategy(id: "antigravity.app-local", error: mismatch),
+                    AntigravityFallbackFixtureStrategy(
+                        id: "antigravity.oauth", error: oauthError, allowsFallback: allowsFallback),
+                ]
+            },
+            resolveFallbackError: AntigravityProviderDescriptor.resolveFallbackError)
+        let outcome = await pipeline.fetch(context: self.makeFetchContext(), provider: .antigravity)
+        #expect(outcome.attempts.first?.errorDescription?.contains("local usage cannot be used") == true)
+        #expect(outcome.attempts.first?.errorDescription?.contains("OAuth data instead") == false)
+        do {
+            _ = try outcome.result.get()
+            Issue.record("Expected the later OAuth failure")
+        } catch {
+            #expect(error as? AntigravityStatusProbeError == oauthError)
+        }
+        #expect(!AntigravityStatusProbeError.accountMismatch(expected: nil, found: nil)
+            .localizedDescription.contains("OAuth data instead"))
     }
 
     @Test
@@ -1199,16 +1226,11 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
 private struct AntigravityFallbackFixtureStrategy: ProviderFetchStrategy {
     let id: String
     let error: AntigravityStatusProbeError?
-    var allowsFallback = true
     let available: Bool
+    var allowsFallback = true
     let kind: ProviderFetchKind = .localProbe
 
-    init(
-        id: String,
-        error: AntigravityStatusProbeError?,
-        available: Bool = true,
-        allowsFallback: Bool = true)
-    {
+    init(id: String, error: AntigravityStatusProbeError?, available: Bool = true, allowsFallback: Bool = true) {
         self.id = id
         self.error = error
         self.available = available

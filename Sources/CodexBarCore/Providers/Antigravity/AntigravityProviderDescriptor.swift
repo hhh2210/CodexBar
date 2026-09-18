@@ -222,20 +222,13 @@ public enum AntigravityProviderDescriptor {
         return FileManager.default.fileExists(atPath: fileURL.path)
     }
 
-    /// Folds per-source errors in strategy order (most authoritative first).
-    ///
-    /// The surfaced error must tell the story of the most authoritative source
-    /// that was actually attempted (#3146, #3673): once a source has produced a
-    /// real failure — a substantive error or a missing CSRF token — later,
-    /// less-authoritative failures never replace it. A `.notRunning` result is
-    /// not a failure but a placeholder ("this source is not present"), so any
-    /// later error — marker or substantive — supersedes it.
     static func resolveFallbackError(_ previous: Error?, _ current: Error) -> Error {
         guard let previous else { return current }
-        guard (previous as? AntigravityStatusProbeError) == .notRunning else {
-            return previous
+        return switch current as? AntigravityStatusProbeError {
+        case .notRunning, .missingCSRFToken:
+            (previous as? AntigravityStatusProbeError) == .notRunning ? current : previous
+        default: current
         }
-        return current
     }
 }
 
@@ -543,7 +536,7 @@ struct AntigravityCLIHTTPSFetchStrategy: ProviderFetchStrategy {
             // Identity-free reports must not replace a selected or injected OAuth account's
             // fallback (#3673 workstream 2): exclude the report with a visible reason instead of
             // silently dropping it. Placeholder .notRunning failures pass through unwrapped so the
-            // pipeline's first-authoritative fold still treats them as placeholders.
+            // pipeline still treats them as unavailable-source placeholders.
             guard self.identityFreeReportFallbackAllowed(context) else {
                 if (error as? AntigravityStatusProbeError) == .notRunning { throw error }
                 throw AntigravityStatusProbeError.identityFreeReportExcluded(

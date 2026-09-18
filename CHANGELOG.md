@@ -5,8 +5,6 @@
 ### Fixed
 - Antigravity: make `ANTIGRAVITY_CLI_PATH` authoritative — a set override that is not an executable fails resolution instead of falling through to PATH and well-known locations, which could spawn a real CLI's interactive login from a background fetch (part of #3673).
 - Antigravity: show the identity-free `agy -p /usage` fallback's exclusion in per-source outcomes when a Google account is selected or OAuth credentials are injected, instead of silently dropping it (part of #3673).
-- Antigravity: stop the account-mismatch error from claiming the selected account's OAuth data is being used when the OAuth source may also have failed (part of #3673).
-- Antigravity: surface the most authoritative attempted source's error when auto fails overall (app → CLI → IDE → OAuth) instead of the last failure, and add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export (part of #3673, related to #3146 and #3662).
 - Azure OpenAI: select OpenAI-compatible v1 in Settings with a shared app/CLI override that preserves the default environment behavior (#3705). Thanks @UndreamerC!
 - DeepSeek: show reported per-model spend alongside existing usage charts, preserving billing currency and reporting period and honoring optional-usage visibility (#2938). Thanks @jky1314!
 - Sharing: retain recognized gateway model families in shared cards and copied statistics, preserving provider attribution and excluding raw namespaces and private model names (#3713). Thanks @Chipagosfinest!
@@ -27,6 +25,7 @@
 - **Smoother everyday use:** improve update access, privacy, shared-card dates, and recovery from temporary provider failures.
 
 ### Fixed
+- Antigravity: add per-source outcome diagnostics to usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (part of #3673, related to #3146 and #3662).
 
 - Codex costs: publish validated reporting windows during historical catch-up while retaining prior data for incomplete sources and preserving automatic power limits (#3669, related to #3508). Thanks @kernnel!
 - Codex: honor Hide Personal Info in the System Account submenu, keeping stable account labels and unchanged promotion actions (#3702, related to #3550). Thanks @zenibako!
