@@ -1545,13 +1545,13 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This inventory row records the provider that owns its static storage location."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
-            line: 454,
+            line: 459,
             anchor: "self = try .minimax(container.decode(MiniMaxDiagnosticDetails.self, forKey: .minimax))",
             expectedProviderIDs: ["minimax"],
             reason: "This tagged diagnostic payload decodes its matching MiniMax detail type and key."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
-            line: 468,
+            line: 473,
             anchor: "try container.encode(details, forKey: .minimax)",
             expectedProviderIDs: ["minimax"],
             reason: "This tagged diagnostic payload encodes MiniMax details under the matching wire key."),
@@ -3718,7 +3718,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared provider integration dispatches a capability owned by the provider descriptor or adapter."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
-            line: 453,
+            line: 458,
             anchor: "case \"minimax\":",
             expectedProviderIDs: ["minimax"],
             expectedReferenceCount: 1,
@@ -3726,7 +3726,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact Codable branch reads the stable MiniMax diagnostic-detail wire discriminator."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
-            line: 466,
+            line: 471,
             anchor: "case let .minimax(details):",
             expectedProviderIDs: ["minimax"],
             expectedReferenceCount: 2,
@@ -3734,7 +3734,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact Codable branch writes the stable MiniMax diagnostic-detail wire discriminator."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/Providers/ProviderDiagnosticExport.swift",
-            line: 600,
+            line: 605,
             anchor: "guard provider == .minimax else { return nil }",
             expectedProviderIDs: ["minimax"],
             expectedReferenceCount: 2,
