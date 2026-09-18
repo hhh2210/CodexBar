@@ -110,6 +110,8 @@ that workspace and never exposes the full provider identifier. This is display-o
 credential selection are unchanged. Separate profile homes for the same workspace also include a hashed source identity,
 so their labels stay distinct without exposing paths. Compact switcher buttons keep the discriminator visible when space
 is limited, using additional rows when needed.
+Hide Personal Info applies to the System Account submenu as well as the switcher: email addresses are removed,
+and stable account numbers distinguish rows while usable workspace labels remain visible.
 
 ### OpenAI web dashboard (optional, off by default)
 - Subscription renewal or expiration dates load after the app publishes dashboard usage. CodexBar first tries the subscription API, then captures only the date and renewal flag from ChatGPT's own billing request in the same account-scoped web session, within an eight-second budget.
@@ -253,6 +255,10 @@ is limited, using additional rows when needed.
     and replay bodies. File cursor metadata, including JSONL resume state, remains available for progress tracking.
     Fresh and cached fetches use progress metadata to recognize retained reports during catch-up, skipping
     detail-row decoding that would be discarded. Reports without a matching retained result still load exact details.
+    During historical catch-up, a validated reporting window can publish once its discovery, parser, materialization,
+    and fork-ownership checks are complete. Metadata-only reads do not establish day coverage; unresolved or unparsed
+    work retains the previous report. Cached publication is attempted before duty-cycle and resource-pause sleeps and
+    after bounded passes, preserving power limits and actual cache timestamps rather than stamping publication as a new scan.
     A native scan loads exact usage rows once, deferring raw token history and checkpoints until a file changes
     or a fork needs its ancestors. A single-use receipt binds those deferred reads and saves to the original
     connection, database identity and SQLite change observations,

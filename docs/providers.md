@@ -415,8 +415,8 @@ provider-specific cookie validation, endpoints, login detection, and error trans
 - Details: `docs/synthetic.md`.
 
 ## OpenRouter
-- API token from `~/.codexbar/config.json` (`providers[].apiKey`) or `OPENROUTER_API_KEY` env var.
-- Reads credits and key rate-limit info from OpenRouter APIs.
+- API token from the resolved CodexBar config (`providers[].apiKey`, default `~/.config/codexbar/config.json`) or `OPENROUTER_API_KEY` env var. Legacy config paths remain supported.
+- Reads regular-key quota from `/key` and attempts regular-key credits; a Management API key is required for 30-day Activity spend and is used only for Activity. Credits always use the selected account’s regular key.
 - Shows daily, weekly, and monthly API-key spend when `/api/v1/key` returns those fields.
 - Override base URL with `OPENROUTER_API_URL` env var.
 - Status: `https://status.openrouter.ai` (link only, no auto-polling yet).
@@ -460,13 +460,12 @@ provider-specific cookie validation, endpoints, login detection, and error trans
 ## Mistral
 - Session cookie (`ory_session_*`) from browser auto-import or manual `Cookie:` header.
 - Cookie import order: Chrome → Firefox → Safari. Chrome first preserves the original behavior for existing users; Firefox (including Developer Edition) is detected automatically; Safari follows for Full Disk Access users. Other Chromium forks use Manual mode. Automatic import reads only unexpired cookies from the documented Mistral domains.
-- CSRF token (`csrftoken` cookie) sent as `X-CSRFTOKEN` for billing and Vibe usage requests.
-- Domains: `admin.mistral.ai` for API billing and credit balance, and `console.mistral.ai` for optional Vibe subscription usage. Console requests forward only `csrftoken` and `ory_session_*`; all other admin cookies stay origin-bound.
-- Reads monthly usage and pricing from the billing usage endpoint, plus credit balance from the billing credits endpoint, using the Mistral web session.
-- Cost is computed client-side from token counts and response pricing.
-- Reads Vibe monthly-plan usage percentage and reset time when the console endpoint is available.
-- The menu bar metric can show either pay-as-you-go API spend or monthly-plan usage; the provider card shows balance when the credits endpoint is available.
-- Resets at end of calendar month.
+- CSRF token (`csrftoken` cookie) sent as `X-CSRFTOKEN` for billing and fallback Vibe requests.
+- Domains: `admin.mistral.ai` for API billing, included subscription allowances, and credit balance, and `console.mistral.ai` for fallback Vibe usage. Console requests forward only `csrftoken` and `ory_session_*`; all other admin cookies stay origin-bound.
+- Reads monthly usage and pricing from the billing usage endpoint, included API/Vibe allowances from the subscription page, and credit balance from the billing credits endpoint.
+- Cost is computed client-side from token counts and response pricing and remains separate from included allowance usage.
+- The menu bar metric can show pay-as-you-go API spend, included API usage, or Vibe monthly-plan usage; the provider card shows used, total, remaining, and reset details for each available allowance.
+- Allowance reset dates come from Mistral; billing usage is grouped by calendar month.
 - Status: `https://status.mistral.ai` (link only, no auto-polling).
 - Details: `docs/mistral.md`.
 
