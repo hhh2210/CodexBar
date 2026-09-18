@@ -1,5 +1,5 @@
 ---
-summary: "OpenRouter provider: API key credits, rate limits, and daily/weekly/monthly spend."
+summary: "OpenRouter provider: API key credits, spending caps, and daily/weekly/monthly spend."
 read_when:
   - Debugging OpenRouter API key usage or spend parsing
   - Updating OpenRouter credits or key-limit display
@@ -64,6 +64,8 @@ CodexBar keeps any valid balance and labels the API key limit as unavailable wit
 or response diagnostic.
 
 Activity history uses the separately configured Management API key and is optional. Malformed activity, including a combined input/output token total outside the safe integer range, leaves valid credits and key quota available and marks history unavailable.
+Reported reasoning counts are retained separately, including when they exceed completion counts. Token totals remain prompt plus completion; reasoning is not added a second time.
+Successful HTTP responses that fail JSON parsing or validation are labeled “Response was invalid.” Network failures retain “Request failed” or “Request timed out”; HTTP errors retain their status-specific diagnostic. These optional failures preserve usable data from the other endpoints.
 
 ## Display
 
@@ -75,6 +77,12 @@ The OpenRouter menu card shows:
 - **Spend notes**: Daily, weekly, and monthly API key spend when OpenRouter returns those fields
 - **Spend chart**: Day/week/month spend can reuse the shared inline dashboard when enough history is available
 - **Balance**: Displayed in the identity section as "Balance: $X.XX" when the credits request succeeds
+- **Pay-as-you-go summary**: Uncapped keys show reported monthly key spend, falling back to lifetime key usage or lifetime account usage with an explicit period label. A successful credits request supplies the separate prepaid balance. Turning off the inline cost summary restores the corresponding detail rows; capped keys retain their existing quota meter.
+
+Management-key counters do not produce a key-spend summary: those keys can report zero key usage while the account
+has activity. Account credits and available Activity history retain their own scope and reporting period.
+
+Shared usage cards and copied statistics group recognized gateway model identifiers such as `openai/gpt-4o` under public family labels such as “GPT,” with usage attributed to OpenRouter. Raw namespaces and model names are omitted; shared model rankings still require complete eligible history.
 
 The **API key limit** is a spending cap, not your prepaid account balance. Configured positive limits show
 “Spending cap, not balance” beneath the amount. Both values remain visible even when the cap exceeds the balance:
@@ -84,10 +92,14 @@ window, then cumulative key spend. Used/remaining display preferences do not cha
 
 Without a configured limit, the detail row says “No limit configured” and no key percentage is shown. Unavailable
 key enrichment retains its diagnostic and account balance. CLI text and JSON detail strings use the same limit
-label and disclosure; the JSON structure is unchanged.
+label and disclosure. Uncapped reported spend also appears in JSON as `providerCost`; unavailable spend remains absent,
+and a reported zero remains zero. CLI text retains the detailed amounts without displaying an artificial zero-dollar budget.
 Settings still shows the returned daily, weekly, and monthly key spend when the API key has no configured limit.
+The deprecated Current Key API `rate_limit` field is ignored, including malformed values, so it cannot hide valid quota or spend details.
 
 ## CLI Usage
+
+With a Management API key, successful Activity history appears in usage text and full terminal cards as a `Last 30 days (UTC)` spend/token summary. Reported spend, BYOK estimates, and mixed totals are labeled accordingly; an empty successful history shows zero. Ordinary usage JSON continues to expose quota, balance, and detail diagnostics without embedding live cost history.
 
 ```bash
 codexbar --provider openrouter
