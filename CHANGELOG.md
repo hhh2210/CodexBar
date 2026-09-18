@@ -1,6 +1,26 @@
 # Changelog
 
-## 0.60.5 — Unreleased
+## 0.60.6 — Unreleased
+
+### Fixed
+- Azure OpenAI: select OpenAI-compatible v1 in Settings with a shared app/CLI override that preserves the default environment behavior (#3705). Thanks @UndreamerC!
+- DeepSeek: show reported per-model spend alongside existing usage charts, preserving billing currency and reporting period and honoring optional-usage visibility (#2938). Thanks @jky1314!
+- Sharing: retain recognized gateway model families in shared cards and copied statistics, preserving provider attribution and excluding raw namespaces and private model names (#3713). Thanks @Chipagosfinest!
+- Mistral: show reported included API and Vibe Code allowances alongside spend and credits, preserving Automatic spend display and independent fallback when optional data is unavailable (#3710). Thanks @JoPaMu!
+- Devin: honor the selected organization, exclude unrelated sites from browser session import, and prefer current decoded credentials over raw storage fallback data.
+- OpenRouter: show an uncapped pay-as-you-go summary with accurate reporting periods and optional prepaid balance, preserving capped-key quotas and avoiding duplicate detail rows (#3696). Thanks @Chipagosfinest!
+- OpenRouter: distinguish invalid response data from network failures in optional credits, key quota, and Activity diagnostics, preserving usable data from the other sources (#3718). Thanks @Chipagosfinest!
+- OpenRouter: retain spend history when reported reasoning tokens exceed completion tokens, preserving the separate counters, input-plus-output totals, quota, and balance (#3717). Thanks @Chipagosfinest!
+- OpenRouter: ignore deprecated key rate-limit metadata, removing the misleading negative request limit and preserving valid quota and spend details when the deprecated field changes shape (#3720). Thanks @Chipagosfinest!
+- Menu bar: retain saved icon positions when hiding or removing status items, including Quit from the status menu and display-change recovery (#3723, related to #3355). Thanks @kratocz!
+- CLI: show successful provider-supplied history in usage text and full terminal cards, including OpenRouter Activity spend and Grok token totals, while preserving source periods, currencies, known zero values, and cost provenance (related to #3717). Thanks @jhairabet-udr!
+
+## 0.60.5 — 2026-09-17
+
+### Highlights
+- **More reliable cost history:** publish validated Codex reporting windows sooner, preserve prior data during incomplete scans, and correct Claude cost estimates.
+- **Clearer usage meters:** recover Cursor Enterprise member budgets, Kimi Code API quotas, Copilot seat-credit bars, and OpenCode Go Monthly selection.
+- **Smoother everyday use:** improve update access, privacy, shared-card dates, and recovery from temporary provider failures.
 
 ### Fixed
 - Antigravity: add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (part of #3673, related to #3146 and #3662).

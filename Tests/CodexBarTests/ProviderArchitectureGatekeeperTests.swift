@@ -194,7 +194,7 @@ struct ProviderArchitectureGatekeeperTests {
     func `small provider capabilities preserve legacy registries`() {
         let descriptors = ProviderDescriptorRegistry.all
         #expect(Set(descriptors.filter(\.metadata.balanceOnly).map(\.id)) == [
-            .deepseek, .deepinfra, .mistral, .moonshot, .poe,
+            .deepseek, .deepinfra, .moonshot, .poe,
         ])
         #expect(Set(descriptors.filter(\.metadata.usesDetailBackedWindow).map(\.id)) == [
             .perplexity,
@@ -1353,13 +1353,13 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This provider-owned adapter passes its fixed identity to shared logging or cache infrastructure."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCLI/CLICardsRenderer.swift",
-            line: 230,
+            line: 235,
             anchor: "provider: .claude,",
             expectedProviderIDs: ["claude"],
             reason: "This provider-specific app branch passes its already-selected identity to a shared helper."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCLI/CLICardsRenderer.swift",
-            line: 231,
+            line: 236,
             anchor: "title: ProviderDescriptorRegistry.descriptor(for: .claude).metadata.displayName,",
             expectedProviderIDs: ["claude"],
             reason: "This provider-specific app branch passes its already-selected identity to a shared helper."),
@@ -1879,7 +1879,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 543,
+            line: 544,
             anchor: "if input.provider == .factory, snapshot.tertiary != nil {",
             expectedProviderIDs: [
                 "alibabatokenplan",
@@ -1911,7 +1911,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 713,
+            line: 714,
             anchor: "case .minimax:",
             expectedProviderIDs: ["codex", "minimax", "poe"],
             expectedReferenceCount: 3,
@@ -1919,7 +1919,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 912,
+            line: 914,
             anchor: "if input.provider == .codex, !input.showOptionalCreditsAndExtraUsage {",
             expectedProviderIDs: ["claude", "codex", "copilot"],
             expectedReferenceCount: 4,
@@ -1927,15 +1927,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 937,
-            anchor: "let resetText = input.provider == .sub2api && namedWindow.window.resetsAt == nil",
-            expectedProviderIDs: ["sub2api"],
-            expectedReferenceCount: 2,
-            expectedReferenceFingerprint: ["sub2api@0", "sub2api@3"],
-            reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
-        AllowedProviderConstruct(
-            path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 1006,
+            line: 1009,
             anchor: "guard provider == .kiro, namedWindow.id == \"kiro-overage\",",
             expectedProviderIDs: ["kiro"],
             expectedReferenceCount: 1,
@@ -1943,7 +1935,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 1034,
+            line: 1037,
             anchor: "if input.provider == .antigravity,",
             expectedProviderIDs: ["antigravity"],
             expectedReferenceCount: 1,
@@ -1951,7 +1943,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 1070,
+            line: 1073,
             anchor: "if provider == .claude || provider == .cursor, window.windowMinutes != 10080 {",
             expectedProviderIDs: ["antigravity", "claude", "codex", "cursor"],
             expectedReferenceCount: 6,
@@ -1966,7 +1958,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ModelHelpers.swift",
-            line: 1104,
+            line: 1107,
             anchor: "guard input.provider == .antigravity else { return nil }",
             expectedProviderIDs: ["antigravity"],
             expectedReferenceCount: 1,
@@ -2022,7 +2014,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1060,
+            line: 1072,
             anchor: "if input.provider == .sub2api {",
             expectedProviderIDs: ["sub2api"],
             expectedReferenceCount: 1,
@@ -2030,7 +2022,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "The sub2api menu card localizes and groups provider-owned usage detail rows for display."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1135,
+            line: 1147,
             anchor: "if provider == .kiro,",
             expectedProviderIDs: ["kilo", "kiro"],
             expectedReferenceCount: 2,
@@ -2038,7 +2030,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1158,
+            line: 1170,
             anchor: "if provider == .minimax {",
             expectedProviderIDs: ["codex", "minimax"],
             expectedReferenceCount: 2,
@@ -2046,7 +2038,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1193,
+            line: 1205,
             anchor: "guard let loginMethod = snapshot?.loginMethod(for: .kilo) else {",
             expectedProviderIDs: ["kilo"],
             expectedReferenceCount: 1,
@@ -2054,7 +2046,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1279,
+            line: 1291,
             anchor: "if input.provider == .antigravity {",
             expectedProviderIDs: ["antigravity", "mistral"],
             expectedReferenceCount: 2,
@@ -2062,7 +2054,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1299,
+            line: 1311,
             anchor: "if input.provider == .codex, let codexProjection = input.codexProjection {",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 1,
@@ -2070,7 +2062,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1315,
+            line: 1327,
             anchor: "if input.provider != .codex, let weekly = snapshot.secondary {",
             expectedProviderIDs: ["alibaba", "alibabatokenplan", "codex", "perplexity", "sub2api"],
             expectedReferenceCount: 5,
@@ -2084,7 +2076,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1355,
+            line: 1367,
             anchor: "if input.provider == .kilo || input.provider == .kimi,",
             expectedProviderIDs: ["kilo", "kimi"],
             expectedReferenceCount: 2,
@@ -2092,7 +2084,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1412,
+            line: 1424,
             anchor: "if input.provider == .zai, let resetText = Self.localizedZaiPeriodicResetText(primary) {",
             expectedProviderIDs: ["zai"],
             expectedReferenceCount: 1,
@@ -2100,7 +2092,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1456,
+            line: 1468,
             anchor: "var paceDetail = if input.provider == .kimi {",
             expectedProviderIDs: ["kimi"],
             expectedReferenceCount: 1,
@@ -2108,7 +2100,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1473,
+            line: 1485,
             anchor: "if input.provider == .warp,",
             expectedProviderIDs: ["warp"],
             expectedReferenceCount: 1,
@@ -2116,7 +2108,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1489,
+            line: 1501,
             anchor: "if input.provider == .sub2api {",
             expectedProviderIDs: ["kiro", "sub2api"],
             expectedReferenceCount: 2,
@@ -2124,7 +2116,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView.swift",
-            line: 1506,
+            line: 1518,
             anchor: "if input.provider == .alibaba || input.provider == .alibabatokenplan,",
             expectedProviderIDs: [
                 "alibaba",
@@ -2185,7 +2177,7 @@ struct ProviderArchitectureGatekeeperTests {
                 "Codex retains its default-provider fallback."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuDescriptor.swift",
-            line: 711,
+            line: 712,
             anchor: "if provider == .factory, snapshot.tertiary != nil {",
             expectedProviderIDs: ["alibabatokenplan", "amp", "codex", "crof", "doubao", "factory", "grok", "sub2api"],
             expectedReferenceCount: 11,
@@ -2205,7 +2197,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuDescriptor.swift",
-            line: 786,
+            line: 787,
             anchor: "let cleaned = if provider == .codex {",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 1,
@@ -2317,7 +2309,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared provider integration dispatches a capability owned by the provider descriptor or adapter."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/ShareStatsPayload.swift",
-            line: 198,
+            line: 208,
             anchor: "([\"codestral-\", \"devstral-\", \"magistral-\", \"mistral-\", \"mistral \", \"mistral.\", \"mixtral-\"], \"Mistral\"),",
             expectedProviderIDs: ["mistral"],
             expectedReferenceCount: 1,
@@ -3323,7 +3315,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact app-runtime bridge coordinates provider-owned state through the shared controller."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 443,
+            line: 445,
             anchor: "if provider == .codex {",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 1,
@@ -3331,7 +3323,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact app-runtime bridge coordinates provider-owned state through the shared controller."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 462,
+            line: 464,
             anchor: "if provider == .claude,",
             expectedProviderIDs: ["claude"],
             expectedReferenceCount: 1,
@@ -3355,7 +3347,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact app-runtime bridge coordinates provider-owned state through the shared controller."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 475,
+            line: 477,
             anchor: "if provider == .antigravity,",
             expectedProviderIDs: ["alibabatokenplan", "amp", "antigravity"],
             expectedReferenceCount: 4,
@@ -3363,7 +3355,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact app-runtime bridge coordinates provider-owned state through the shared controller."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 517,
+            line: 519,
             anchor: "if provider == .cursor {",
             expectedProviderIDs: ["cursor"],
             expectedReferenceCount: 1,
@@ -3371,7 +3363,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "Cursor Grok Bot weekly included usage is a named extraRateWindow on the shared widget projection."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 530,
+            line: 532,
             anchor: "if provider == .claude, self.settings.claudeModelScopedWeeklyUsageVisible {",
             expectedProviderIDs: ["claude"],
             expectedReferenceCount: 1,
@@ -3379,7 +3371,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "Claude's opt-in widget projection adds provider-owned model-scoped weekly quota rows."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+WidgetSnapshot.swift",
-            line: 544,
+            line: 546,
             anchor: "if provider == .kimi {",
             expectedProviderIDs: ["kimi"],
             expectedReferenceCount: 1,
