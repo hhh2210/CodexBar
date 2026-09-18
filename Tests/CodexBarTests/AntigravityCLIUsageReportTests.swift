@@ -182,19 +182,27 @@ extension AntigravityCLIHTTPSFetchStrategyTests {
         }
     }
 
-    @Test
-    func `not running legacy failure stays a placeholder when print is excluded`() async {
+    @Test(arguments: [AntigravityStatusProbeError.notRunning, .missingCSRFToken])
+    func `unavailable legacy failure stays a placeholder when print is excluded`(
+        error: AntigravityStatusProbeError) async
+    {
         let context = self.makeFetchContext(
             selectedTokenAccountID: UUID(),
             env: self.accountEnv(email: "s@example.com"))
-        await #expect(throws: AntigravityStatusProbeError.notRunning) {
-            try await AntigravityCLIHTTPSFetchStrategy.fetchWithReportFallback(
+        let earlierFailure = AntigravityStatusProbeError.apiError("earlier app failure")
+        do {
+            _ = try await AntigravityCLIHTTPSFetchStrategy.fetchWithReportFallback(
                 context: context,
-                legacyFetch: { throw AntigravityStatusProbeError.notRunning },
+                legacyFetch: { throw error },
                 reportFetch: {
                     Issue.record("Print cannot prove the requested OAuth account")
                     throw AntigravityStatusProbeError.timedOut
                 })
+            Issue.record("The unavailable CLI source must fail")
+        } catch let caught {
+            #expect(caught as? AntigravityStatusProbeError == error)
+            let surfaced = AntigravityProviderDescriptor.resolveFallbackError(earlierFailure, caught)
+            #expect(surfaced as? AntigravityStatusProbeError == earlierFailure)
         }
     }
 
