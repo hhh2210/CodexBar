@@ -328,6 +328,7 @@ public struct ProviderFetchPipeline: Sendable {
     public let resolveStrategies: @Sendable (ProviderFetchContext) async -> [any ProviderFetchStrategy]
     private let retrySleeper: RetrySleeper
     private let resolveFallbackError: FallbackErrorResolver
+    private let logger: CodexBarLogger?
 
     public init(
         resolveStrategies: @escaping @Sendable (ProviderFetchContext) async -> [any ProviderFetchStrategy],
@@ -335,11 +336,13 @@ public struct ProviderFetchPipeline: Sendable {
             guard seconds > 0 else { return }
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
-        resolveFallbackError: @escaping FallbackErrorResolver = { _, error in error })
+        resolveFallbackError: @escaping FallbackErrorResolver = { _, error in error },
+        logger: CodexBarLogger? = nil)
     {
         self.resolveStrategies = resolveStrategies
         self.retrySleeper = retrySleeper
         self.resolveFallbackError = resolveFallbackError
+        self.logger = logger
     }
 
     public func fetch(context: ProviderFetchContext, provider: UsageProvider) async -> ProviderFetchOutcome {
@@ -394,18 +397,20 @@ public struct ProviderFetchPipeline: Sendable {
                 if strategy.shouldFallback(on: error, context: context) {
                     continue
                 }
-                return ProviderFetchOutcome(result: .failure(lastAvailableError ?? error), attempts: attempts)
+                let surfacedError = lastAvailableError ?? error
+                self.logPerSourceOutcomes(provider: provider, attempts: attempts, surfacedError: surfacedError)
+                return ProviderFetchOutcome(result: .failure(surfacedError), attempts: attempts)
             }
         }
 
         let error = lastAvailableError ?? ProviderFetchError.noAvailableStrategy(provider)
-        Self.logPerSourceOutcomes(provider: provider, attempts: attempts, surfacedError: error)
+        self.logPerSourceOutcomes(provider: provider, attempts: attempts, surfacedError: error)
         return ProviderFetchOutcome(result: .failure(error), attempts: attempts)
     }
 
     /// One debug line recording what every evaluated source did, so failure
     /// reports can show per-source outcomes instead of a single masked error.
-    private static func logPerSourceOutcomes(
+    private func logPerSourceOutcomes(
         provider: UsageProvider,
         attempts: [ProviderFetchAttempt],
         surfacedError: Error)
@@ -414,7 +419,7 @@ public struct ProviderFetchPipeline: Sendable {
         let outcomes = attempts.map { attempt in
             let detail = switch attempt.outcome {
             case .failed:
-                "failed: \(attempt.errorDescription ?? "unknown error")"
+                "failed: \(ProviderDiagnosticFetchAttempt.errorCategoryLabel(attempt.errorDescription))"
             case .skipped:
                 "skipped: unavailable"
             case .succeeded:
@@ -422,11 +427,12 @@ public struct ProviderFetchPipeline: Sendable {
             }
             return "\(attempt.strategyID) (\(ProviderDiagnosticFetchAttempt.kindLabel(attempt.kind))): \(detail)"
         }.joined(separator: " -> ")
-        CodexBarLog.logger(LogCategories.provider(provider)).debug(
-            "Fetch strategies exhausted; surfacing most authoritative error",
+        let logger = self.logger ?? CodexBarLog.logger(LogCategories.provider(provider))
+        logger.debug(
+            "Provider fetch failed",
             metadata: [
                 "provider": provider.rawValue,
-                "error": surfacedError.localizedDescription,
+                "errorCategory": ProviderDiagnosticError(from: surfacedError, authConfigured: true).category,
                 "sources": outcomes,
             ])
     }

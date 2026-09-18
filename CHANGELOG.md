@@ -23,7 +23,7 @@
 - **Smoother everyday use:** improve update access, privacy, shared-card dates, and recovery from temporary provider failures.
 
 ### Fixed
-- Antigravity: add per-source outcome diagnostics to verbose usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (part of #3673, related to #3146 and #3662).
+- Antigravity: add per-source outcome diagnostics to usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (part of #3673, related to #3146 and #3662).
 
 - Codex costs: publish validated reporting windows during historical catch-up while retaining prior data for incomplete sources and preserving automatic power limits (#3669, related to #3508). Thanks @kernnel!
 - Codex: honor Hide Personal Info in the System Account submenu, keeping stable account labels and unchanged promotion actions (#3702, related to #3550). Thanks @zenibako!

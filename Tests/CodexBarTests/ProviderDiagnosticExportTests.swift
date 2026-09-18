@@ -470,6 +470,45 @@ struct ProviderDiagnosticExportTests {
     }
 
     @Test
+    func `serialized fetch outcomes remain compatible with legacy readers`() throws {
+        struct LegacyAttempt: Codable {
+            let kind: String
+            let wasAvailable: Bool
+            let errorCategory: String?
+        }
+        let attempts = [
+            ProviderFetchAttempt(
+                strategyID: "antigravity.app-local",
+                kind: .localProbe,
+                wasAvailable: true,
+                errorDescription: "HTTP failure: sensitive-payload"),
+            ProviderFetchAttempt(
+                strategyID: "antigravity.cli-https",
+                kind: .cli,
+                wasAvailable: false,
+                errorDescription: nil),
+            ProviderFetchAttempt(
+                strategyID: "antigravity.oauth",
+                kind: .oauth,
+                wasAvailable: true,
+                errorDescription: nil),
+        ].map { ProviderDiagnosticFetchAttempt(from: $0) }
+        let data = try JSONEncoder().encode(attempts)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        #expect(object.compactMap { $0["strategyID"] as? String } == [
+            "antigravity.app-local", "antigravity.cli-https", "antigravity.oauth",
+        ])
+        #expect(object.compactMap { $0["outcome"] as? String } == ["failed", "skipped", "succeeded"])
+        #expect(try !#require(String(data: data, encoding: .utf8)).contains("sensitive-payload"))
+        let legacy = try JSONDecoder().decode([LegacyAttempt].self, from: data)
+        #expect(legacy.map(\.kind) == ["local", "cli", "oauth"])
+        let oldData = try JSONEncoder().encode(legacy)
+        let restored = try JSONDecoder().decode([ProviderDiagnosticFetchAttempt].self, from: oldData)
+        #expect(restored.allSatisfy { $0.strategyID == nil })
+        #expect(restored.map(\.outcome) == ["failed", "skipped", "succeeded"])
+    }
+
+    @Test
     func `missing api key setup errors map to auth before api`() {
         let category = ProviderDiagnosticFetchAttempt.errorCategoryLabel(
             "Azure OpenAI API key not configured. Set AZURE_OPENAI_API_KEY.")
