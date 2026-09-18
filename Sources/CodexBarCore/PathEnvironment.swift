@@ -354,7 +354,7 @@ public enum BinaryLocator {
     }
 
     // swiftlint:disable function_parameter_count
-    private static func resolveBinary(
+    static func resolveBinary(
         name: String,
         overrideKey: String,
         env: [String: String],
