@@ -3,6 +3,7 @@
 ## 0.60.6 — Unreleased
 
 ### Fixed
+- Antigravity: add per-source outcome diagnostics to usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (#3683, part of #3673, related to #3146 and #3662). Thanks @hhh2210!
 - Azure OpenAI: select OpenAI-compatible v1 in Settings with a shared app/CLI override that preserves the default environment behavior (#3705). Thanks @UndreamerC!
 - DeepSeek: show reported per-model spend alongside existing usage charts, preserving billing currency and reporting period and honoring optional-usage visibility (#2938). Thanks @jky1314!
 - Sharing: retain recognized gateway model families in shared cards and copied statistics, preserving provider attribution and excluding raw namespaces and private model names (#3713). Thanks @Chipagosfinest!
@@ -10,8 +11,10 @@
 - Devin: honor the selected organization, exclude unrelated sites from browser session import, and prefer current decoded credentials over raw storage fallback data.
 - OpenRouter: show an uncapped pay-as-you-go summary with accurate reporting periods and optional prepaid balance, preserving capped-key quotas and avoiding duplicate detail rows (#3696). Thanks @Chipagosfinest!
 - OpenRouter: distinguish invalid response data from network failures in optional credits, key quota, and Activity diagnostics, preserving usable data from the other sources (#3718). Thanks @Chipagosfinest!
+- Grok: show available usage-limit reset coupons and expiry dates from the account that supplied billing, without delaying weekly usage or reusing persisted coupon inventory (#3188). Thanks @Leshabeats!
 - OpenRouter: retain spend history when reported reasoning tokens exceed completion tokens, preserving the separate counters, input-plus-output totals, quota, and balance (#3717). Thanks @Chipagosfinest!
 - OpenRouter: ignore deprecated key rate-limit metadata, removing the misleading negative request limit and preserving valid quota and spend details when the deprecated field changes shape (#3720). Thanks @Chipagosfinest!
+- Venice: add an explicit Web source for subscription credits, monthly spending, bank cap, and refill dates, with isolated API-account ownership and cookie controls (#3474). Thanks @audreyt!
 - Menu bar: retain saved icon positions when hiding or removing status items, including Quit from the status menu and display-change recovery (#3723, related to #3355). Thanks @kratocz!
 - CLI: show successful provider-supplied history in usage text and full terminal cards, including OpenRouter Activity spend and Grok token totals, while preserving source periods, currencies, known zero values, and cost provenance (related to #3717). Thanks @jhairabet-udr!
 
@@ -23,7 +26,6 @@
 - **Smoother everyday use:** improve update access, privacy, shared-card dates, and recovery from temporary provider failures.
 
 ### Fixed
-- Antigravity: add per-source outcome diagnostics to usage output, debug logs, and the diagnose export, with per-attempt strategy IDs and skipped reasons (part of #3673, related to #3146 and #3662).
 
 - Codex costs: publish validated reporting windows during historical catch-up while retaining prior data for incomplete sources and preserving automatic power limits (#3669, related to #3508). Thanks @kernnel!
 - Codex: honor Hide Personal Info in the System Account submenu, keeping stable account labels and unchanged promotion actions (#3702, related to #3550). Thanks @zenibako!

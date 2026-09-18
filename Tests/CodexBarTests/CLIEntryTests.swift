@@ -651,6 +651,9 @@ final class CLIEntryTests: XCTestCase {
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.auto, provider: .kilo))
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.auto, provider: .grok))
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.web, provider: .grok))
+        XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.auto, provider: .venice))
+        XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.api, provider: .venice))
+        XCTAssertTrue(CodexBarCLI.sourceModeRequiresWebSupport(.web, provider: .venice))
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.auto, provider: .amp))
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(.api, provider: .kilo))
         XCTAssertFalse(CodexBarCLI.sourceModeRequiresWebSupport(
@@ -870,6 +873,7 @@ final class CLIEntryTests: XCTestCase {
         // A present, empty synthetic credential envelope fails before any file credential lookup or HTTP request.
         let environment = [
             "HOME": root.path,
+            "GEMINI_CLI_HOME": root.appendingPathComponent(".gemini", isDirectory: true).path,
             CodexBarConfigStore.pathEnvironmentKey: configURL.path,
             AntigravityOAuthCredentialsStore.environmentCredentialsKey: "{}",
         ]
