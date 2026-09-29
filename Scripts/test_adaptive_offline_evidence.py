@@ -106,6 +106,42 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
         self.assertEqual(len({record["stream"] for record in quota}), 2)
         self.assertEqual([record["usedPercent"] for record in quota if not record["first"]], [41.0, 6.0])
 
+    def test_accounts_resetting_within_the_same_hour_stay_separate_despite_reset_jitter(self):
+        start = self.now - 7200
+        hour = (int(start) // 3600 + 72) * 3600
+        self.write_rollout("rollout-a.jsonl", [
+            token_count(start, 20.0, hour + 5 * 60),
+            token_count(start + 60, 21.0, hour + 5 * 60 + 2),
+            token_count(start + 120, 22.0, hour + 5 * 60 - 1),
+        ])
+        self.write_rollout("rollout-b.jsonl", [
+            token_count(start + 30, 3.0, hour + 25 * 60),
+            token_count(start + 90, 4.0, hour + 25 * 60 + 3),
+        ])
+
+        quota = [record for record in self.export() if record["kind"] == "quota"]
+
+        self.assertEqual(len({record["stream"] for record in quota}), 2)
+        self.assertEqual([record["usedPercent"] for record in quota if not record["first"]], [21.0, 4.0, 22.0])
+
+    def test_quota_increase_at_the_end_of_a_trace_is_measured_for_every_policy(self):
+        records = [
+            {"kind": "header"},
+            {"t": 0, "kind": "quota", "stream": "s0", "windowMinutes": 10080, "usedPercent": 10.0, "first": True},
+            {"t": 100, "kind": "quota", "stream": "s0", "windowMinutes": 10080, "usedPercent": 11.0, "first": False},
+        ]
+
+        rows = {row["policy"]: row for row in self.module.summarize(records)["policies"]}
+
+        self.assertEqual(rows["fixed30"]["lagMaxMinutes"], 20.0)
+        self.assertTrue(all("lagMaxMinutes" in row for row in rows.values()))
+        self.assertEqual(rows["fixed30"]["refreshesPerDay"], round(4 / (100 / 1440), 1))
+
+    def test_percentiles_use_the_replay_kit_nearest_rank(self):
+        self.assertEqual(self.module.percentile([float(value) for value in range(1, 21)], 0.95), 19.0)
+        self.assertEqual(self.module.percentile([1.0, 2.0, 3.0, 4.0], 0.5), 2.0)
+        self.assertEqual(self.module.percentile([7.0], 0.95), 7.0)
+
     def test_agent_aware_replay_catches_quota_increases_that_long_idle_misses(self):
         records = [{"kind": "header"}]
         records += [{"t": minute, "kind": "codexActivity"} for minute in range(100, 140)]

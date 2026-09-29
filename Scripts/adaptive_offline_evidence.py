@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
 import re
-import statistics
 import sys
 import time
 
@@ -30,6 +30,10 @@ SCAN_INTERVAL_MINUTES = 0.5
 CODING_ACTIVITY_MINUTES = 5.0
 CODING_ACTIVITY_DELAY_MINUTES = 5.0
 LONG_IDLE_DELAY_MINUTES = 30.0
+# Longest gap any compared policy leaves between refreshes, so increases near the end of a trace are still measured.
+LAG_HORIZON_MINUTES = LONG_IDLE_DELAY_MINUTES + SCAN_INTERVAL_MINUTES
+# Codex reports the same reset instant up to a few seconds apart across observations.
+RESET_TOLERANCE_SECONDS = 300.0
 
 
 def parse_timestamp(text: str) -> float | None:
@@ -47,7 +51,7 @@ def recent_files(root: Path, pattern: str, since: float) -> list[Path]:
 
 def read_codex(sessions: Path, since: float) -> tuple[set[int], list[tuple[float, str, int, float, float | None]]]:
     activity: set[int] = set()
-    quota: list[tuple[float, str, int, float, float | None]] = []
+    quota: list[tuple[float, str, int, float, float | None]] = []  # stamp, limit key, window, used, reset
     limit_keys: dict[str, str] = {}
     for path in recent_files(sessions, "rollout-*.jsonl", since):
         with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -73,8 +77,8 @@ def read_codex(sessions: Path, since: float) -> tuple[set[int], list[tuple[float
                     if used is None or minutes is None:
                         continue
                     reset = entry.get("resets_at")
-                    minutes_to_reset = (reset - stamp) / 60 if isinstance(reset, (int, float)) else None
-                    quota.append((stamp, key, int(minutes), float(used), minutes_to_reset))
+                    quota.append((stamp, key, int(minutes), float(used),
+                                  float(reset) if isinstance(reset, (int, float)) else None))
     return activity, quota
 
 
@@ -92,6 +96,12 @@ def read_claude(projects: Path, since: float) -> set[int]:
     return activity
 
 
+def same_reset(latest: float | None, reset: float | None) -> bool:
+    if latest is None or reset is None:
+        return latest is None and reset is None
+    return abs(reset - latest) <= RESET_TOLERANCE_SECONDS
+
+
 def build_records(
     activity: dict[str, set[int]],
     quota: list[tuple[float, str, int, float, float | None]],
@@ -103,14 +113,19 @@ def build_records(
     records: list[dict] = []
     for kind, bucket in activity.items():
         records += [{"t": minute - origin, "kind": f"{kind}Activity"} for minute in sorted(bucket)]
-    # Accounts can share a limit id but not a reset time, and a reset starts a new window, so each
-    # (limit, window, reset hour) is its own stream. Only rising usage counts: concurrent sessions report
-    # slightly stale snapshots that would otherwise flicker by one percent.
-    streams: dict[tuple, str] = {}
+    # Accounts can share a limit id but not a reset instant, and a reset starts a new window, so each
+    # (limit, window, reset instant) is its own stream. An observation joins the stream whose latest reset is within
+    # the tolerance. Only rising usage counts: concurrent sessions report slightly stale snapshots that would
+    # otherwise flicker by one percent.
+    latest_resets: dict[tuple[str, int], dict[str, float | None]] = {}
     peaks: dict[str, float] = {}
-    for stamp, key, window, used, minutes_to_reset in sorted(quota):
-        anchor = round((stamp / 60 + minutes_to_reset) / 60) if minutes_to_reset is not None else None
-        stream = streams.setdefault((key, window, anchor), f"s{len(streams)}")
+    stream_count = 0
+    for stamp, key, window, used, reset in sorted(quota, key=lambda observation: observation[0]):
+        streams = latest_resets.setdefault((key, window), {})
+        stream = next((stream for stream, latest in streams.items() if same_reset(latest, reset)), None)
+        if stream is None:
+            stream, stream_count = f"s{stream_count}", stream_count + 1
+        streams[stream] = reset
         if stream in peaks and used <= peaks[stream]:
             continue
         first = stream not in peaks
@@ -196,6 +211,12 @@ def detection_lags(refreshes: list[float], changes: list[float]) -> list[float]:
     return lags
 
 
+def percentile(values: list[float], fraction: float) -> float:
+    # Nearest rank, matching StalenessStats in AdaptiveReplayKit.
+    rank = math.ceil(fraction * len(values))
+    return values[max(0, min(len(values) - 1, rank - 1))]
+
+
 def summarize(records: list[dict]) -> dict:
     body = [record for record in records if record.get("kind") != "header"]
     end = max((record["t"] for record in body), default=0)
@@ -204,13 +225,13 @@ def summarize(records: list[dict]) -> dict:
     days = max(end / 1440, 1 / 24)
     rows = []
     for policy in POLICIES:
-        refreshes = simulate(policy, end, activity)
+        refreshes = simulate(policy, end + LAG_HORIZON_MINUTES, activity)
         lags = sorted(detection_lags(refreshes, changes))
-        row = {"policy": policy, "refreshesPerDay": round(len(refreshes) / days, 1)}
+        row = {"policy": policy, "refreshesPerDay": round(sum(refresh <= end for refresh in refreshes) / days, 1)}
         if lags:
             row |= {
-                "lagP50Minutes": statistics.median(lags),
-                "lagP95Minutes": lags[min(len(lags) - 1, int(0.95 * len(lags)))],
+                "lagP50Minutes": percentile(lags, 0.5),
+                "lagP95Minutes": percentile(lags, 0.95),
                 "lagMaxMinutes": lags[-1],
                 "withinFiveMinutes": round(sum(lag <= 5 for lag in lags) / len(lags), 3),
             }
