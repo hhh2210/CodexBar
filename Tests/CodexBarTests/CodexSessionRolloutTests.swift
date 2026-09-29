@@ -13,6 +13,10 @@ struct CodexSessionRolloutTests {
         "/Applications/ChatGPT.app/Contents/Resources/codex",
         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
     ]
+    /// Shape of the Codex-managed background server (`codex app-server daemon`), recorded from a live Mac.
+    private static let managedDaemonExecutable =
+        "<codex-home>/packages/app-server-daemon/releases/0.158.0-aarch64-apple-darwin/bin/codex"
+    private static let managedDaemonArguments = "app-server --listen unix:// --managed-daemon"
 
     @Test
     func `first rollout line maps to file only agent session`() throws {
@@ -173,6 +177,114 @@ struct CodexSessionRolloutTests {
             now: now,
             rolloutAge: 30,
             appServerExecutable: executable)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test(arguments: ["daemon.pid", "app-server.pid"])
+    func `trusted managed codex daemon projects recent rollout activity without an agent process`(
+        pidRecord: String) async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: pidRecord)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+        let session = try #require(sessions.first)
+
+        #expect(sessions.count == 1)
+        #expect(session.provider == .codex)
+        #expect(session.state == .active)
+        #expect(session.pid == nil)
+        #expect(try abs(#require(session.lastActivityAt).timeIntervalSince(now.addingTimeInterval(-30))) < 0.01)
+    }
+
+    @Test
+    func `idle managed codex daemon with a stale rollout does not produce coding activity`() async throws {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 31 * 60,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: "daemon.pid")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test
+    func `untrusted managed codex daemon cannot authorize adaptive rollout inspection`() async throws {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: "daemon.pid",
+            appServerIsTrusted: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test
+    func `recorded daemon pid reused by another openai process cannot authorize adaptive rollout inspection`()
+        async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            appServerArguments: "",
+            daemonPIDRecord: "daemon.pid")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test(arguments: [nil, 9999] as [Int32?])
+    func `managed codex daemon without a matching pid record cannot authorize adaptive rollout inspection`(
+        recordedPID: Int32?) async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: recordedPID == nil ? nil : "daemon.pid",
+            recordedDaemonPID: recordedPID ?? 0)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let sessions = await fixture.scanner.scan(
@@ -396,6 +508,31 @@ struct CodexSessionRolloutTests {
         #expect(decision.delay == .seconds(age < 300 ? 300 : 1800))
     }
 
+    @Test(arguments: [30.0, 6 * 60.0])
+    func `managed codex daemon rollout freshness controls five versus thirty minute cadence`(
+        age: TimeInterval) async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: age,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: "daemon.pid")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sessions = await fixture.scanner.scan(
+            now: now, environment: fixture.environment, includeFileOnlySessions: false)
+        let decision = UsageStore.adaptiveRefreshDecision(
+            now: now,
+            lastMenuOpenAt: nil,
+            lastCodingActivityAt: AgentSessionsStore.latestActivityAt(in: sessions),
+            lowPowerModeEnabled: false,
+            thermalState: .nominal)
+
+        #expect(decision.reason == (age < 300 ? .codingActivity : .longIdle))
+        #expect(decision.delay == .seconds(age < 300 ? 300 : 1800))
+    }
+
     @Test(arguments: Self.chatGPTExecutables)
     func `app server trust is revalidated after a successful scan`(executable: String) async throws {
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -429,6 +566,9 @@ struct CodexSessionRolloutTests {
         now: Date,
         rolloutAge: TimeInterval,
         appServerExecutable: String = "/Applications/ChatGPT.app/Contents/Resources/codex",
+        appServerArguments: String = "-c features.code_mode_host=true app-server --analytics-default-enabled",
+        daemonPIDRecord: String? = nil,
+        recordedDaemonPID: Int32 = 4234,
         appServerIsTrusted: Bool = true,
         appServerTrustValidator: LocalAgentSessionScanner
             .AppServerTrustValidator? = nil) throws -> AdaptiveChatGPTFixture
@@ -451,15 +591,23 @@ struct CodexSessionRolloutTests {
         try fileManager.setAttributes(
             [.modificationDate: now.addingTimeInterval(-rolloutAge)],
             ofItemAtPath: rollout.path)
+        if let daemonPIDRecord {
+            let directory = codexHome.appendingPathComponent("app-server-daemon", isDirectory: true)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(#"{"pid":\#(recordedDaemonPID),"processStartTime":"synthetic"}"#.utf8)
+                .write(to: directory.appendingPathComponent(daemonPIDRecord))
+        }
 
-        let executable = appServerExecutable.replacingOccurrences(of: "<home>", with: root.path)
+        let executable = appServerExecutable
+            .replacingOccurrences(of: "<codex-home>", with: codexHome.path)
+            .replacingOccurrences(of: "<home>", with: root.path)
         let scanner = LocalAgentSessionScanner(
             processOutputProvider: { _ in
-                "4234 1 Mon Jul 6 09:03:00 2026 \(executable) " +
-                    "-c features.code_mode_host=true app-server --analytics-default-enabled"
+                "4234 1 Mon Jul 6 09:03:00 2026 \(executable) \(appServerArguments)"
             },
             cwdProvider: { _, _ in [:] },
-            appServerTrustValidator: appServerTrustValidator ?? { _ in appServerIsTrusted })
+            appServerTrustValidator: appServerTrustValidator ?? { _ in appServerIsTrusted },
+            managedDaemonTrustValidator: { _ in appServerIsTrusted })
         return AdaptiveChatGPTFixture(
             root: root,
             rollout: rollout,

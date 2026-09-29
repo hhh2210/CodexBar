@@ -1,6 +1,18 @@
 import Foundation
 
 public enum CodexHomeScope {
+    private struct AppServerPIDRecord: Decodable { let pid: Int32 }
+
+    /// PIDs Codex records for its background app server. Daemon-owned and legacy installs use separate files.
+    public static func recordedAppServerPIDs(codexHome: URL) -> [Int32] {
+        let directory = codexHome.resolvingSymlinksInPath().standardizedFileURL
+            .appendingPathComponent("app-server-daemon", isDirectory: true)
+        return ["daemon.pid", "app-server.pid"].compactMap { name in
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
+            return try? JSONDecoder().decode(AppServerPIDRecord.self, from: data).pid
+        }
+    }
+
     public static func isAppServerProcess(_ pid: Int32) -> Bool {
         #if canImport(Darwin)
         guard pid > 0, let arguments = DarwinProcessEnumerator.arguments(pid: pid) else { return false }

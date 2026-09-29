@@ -40,6 +40,12 @@ enum ChatGPTCodexProcessTrust {
         return processIsTrusted(pid) && appIsTrusted("/Applications/ChatGPT.app")
     }
 
+    /// The managed daemon runs from a versioned release directory, so the caller matches it by the PID Codex records
+    /// for it instead of by path; this still checks the running code's signature.
+    static func isTrustedManagedDaemon(_ pid: Int32) -> Bool {
+        self.isOpenAIProcess(pid)
+    }
+
     private static func isOpenAIProcess(_ pid: Int32) -> Bool {
         var code: SecCode?
         guard SecCodeCopyGuestWithAttributes(
@@ -56,6 +62,10 @@ enum ChatGPTCodexProcessTrust {
     }
     #else
     static func isTrusted(_: Int32) -> Bool {
+        false
+    }
+
+    static func isTrustedManagedDaemon(_: Int32) -> Bool {
         false
     }
     #endif
@@ -142,6 +152,7 @@ public struct LocalAgentSessionScanner: Sendable {
     private let cwdProvider: CWDProvider?
     private let processEnvironmentProvider: ProcessEnvironmentProvider?
     private let appServerTrustValidator: AppServerTrustValidator
+    private let managedDaemonTrustValidator: AppServerTrustValidator
     private let didVisitDirectoryEntry: (@Sendable () -> Void)?
 
     public init(config: SessionScanConfig = SessionScanConfig()) {
@@ -156,6 +167,9 @@ public struct LocalAgentSessionScanner: Sendable {
         appServerTrustValidator: @escaping AppServerTrustValidator = {
             ChatGPTCodexProcessTrust.isTrusted($0.pid)
         },
+        managedDaemonTrustValidator: @escaping AppServerTrustValidator = {
+            ChatGPTCodexProcessTrust.isTrustedManagedDaemon($0.pid)
+        },
         didVisitDirectoryEntry: (@Sendable () -> Void)? = nil)
     {
         self.config = config
@@ -163,6 +177,7 @@ public struct LocalAgentSessionScanner: Sendable {
         self.cwdProvider = cwdProvider
         self.processEnvironmentProvider = processEnvironmentProvider
         self.appServerTrustValidator = appServerTrustValidator
+        self.managedDaemonTrustValidator = managedDaemonTrustValidator
         self.didVisitDirectoryEntry = didVisitDirectoryEntry
     }
 
@@ -177,8 +192,16 @@ public struct LocalAgentSessionScanner: Sendable {
             AgentPSOutputParser.agentProcesses(from: allProcesses))
             .prefix(max(0, self.config.maxProcessCount)))
         let homeDirectory = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory(), isDirectory: true)
+        // Provider-specific by design: Codex owns CODEX_HOME, its rollouts, and its managed daemon PID records.
+        let codexHomeDirectory = URL(
+            fileURLWithPath: environment["CODEX_HOME"] ?? homeDirectory.appendingPathComponent(".codex").path,
+            isDirectory: true)
         let trustedCodexAppServerPresent = AgentPSOutputParser.hasTrustedChatGPTCodexAppServer(
-            in: allProcesses, validator: self.appServerTrustValidator)
+            in: allProcesses, validator: self.appServerTrustValidator) ||
+            AgentPSOutputParser.hasTrustedManagedCodexDaemon(
+                in: allProcesses,
+                recordedPIDs: CodexHomeScope.recordedAppServerPIDs(codexHome: codexHomeDirectory),
+                validator: self.managedDaemonTrustValidator)
         guard Self.shouldScanSessionMetadata(
             hasAgentProcesses: !processes.isEmpty,
             includeFileOnlySessions: includeFileOnlySessions,
@@ -189,9 +212,6 @@ public struct LocalAgentSessionScanner: Sendable {
         let cwdByPID = await self.cwdByPID(processes.map(\.pid), environment: environment)
         let codexCWDs = processes.filter { AgentPSOutputParser.provider(for: $0) == .codex }
             .compactMap { cwdByPID[$0.pid] }
-        let codexHomeDirectory = URL(
-            fileURLWithPath: environment["CODEX_HOME"] ?? homeDirectory.appendingPathComponent(".codex").path,
-            isDirectory: true)
         let host = ProcessInfo.processInfo.hostName
         var directoryBudget = DirectoryMetadataScanBudget(
             maxEntryCount: self.config.maxDirectoryEntryCount,

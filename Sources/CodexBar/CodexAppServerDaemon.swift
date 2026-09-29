@@ -3,7 +3,6 @@ import Foundation
 
 @MainActor
 struct CodexAppServerDaemon {
-    private struct PIDRecord: Decodable { let pid: Int32 }
     private struct Version: Decodable {
         let status: String
         let backend: String?
@@ -15,14 +14,8 @@ struct CodexAppServerDaemon {
 
     func restartIfRunning(homeURL: URL, environment: [String: String]) async -> String? {
         let home = homeURL.resolvingSymlinksInPath().standardizedFileURL
-        // Codex uses separate PID records for legacy and daemon-owned installations.
-        guard ["daemon.pid", "app-server.pid"].contains(where: { name in
-            let url = home.appendingPathComponent("app-server-daemon/\(name)")
-            guard let data = try? Data(contentsOf: url),
-                  let record = try? JSONDecoder().decode(PIDRecord.self, from: data)
-            else { return false }
-            return self.isAppServerProcess(record.pid)
-        }) else { return nil }
+        guard CodexHomeScope.recordedAppServerPIDs(codexHome: home).contains(where: self.isAppServerProcess)
+        else { return nil }
         let env = CodexHomeScope.scopedEnvironment(base: environment, codexHome: home.path)
         let log = CodexBarLog.logger("codex-account-promotion")
         var phase = "detect"
