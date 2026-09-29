@@ -124,6 +124,7 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
         self.assertIn("agentAwareNoMenu", out.getvalue())
+        self.assertIn("unconstrained counterfactual: assumes no menu opens, no Low Power Mode", out.getvalue())
 
     def test_accounts_sharing_a_limit_id_stay_separate_and_flicker_is_ignored(self):
         start = self.now - 7200

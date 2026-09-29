@@ -6,10 +6,12 @@ writes a small JSONL file. Each record holds only a minute offset from the first
 quota observation (opaque stream index, window minutes, rising used percent). It never writes paths, working
 directories, session or account identifiers, model or plan names, prompts, absolute dates, or the time zone. Nothing
 is uploaded. The file still holds a daily activity rhythm, so it defaults to CodexBar's per-user directory,
-~/.codexbar, outside any checkout. Keep it on this Mac and share only the `replay` table.
+~/.codexbar, outside any checkout. Keep it on this Mac, share only the `replay` table, and delete it when done.
 
 `replay` compares refresh policies on an exported file: refreshes per day, and how long each quota increase seen in a
-rollout waits for the next simulated refresh. Adaptive rows assume no menu opens, so they are upper bounds on delay.
+rollout waits for the next simulated refresh. The Adaptive rows are an unconstrained counterfactual. They assume no
+menu opens, so they are upper bounds on delay; no Low Power Mode or thermal pressure, under which the app refreshes
+every 30 minutes and may pause activity scanning; and perfect activity detection.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ LONG_IDLE_DELAY_MINUTES = 30.0
 LAG_HORIZON_MINUTES = LONG_IDLE_DELAY_MINUTES + SCAN_INTERVAL_MINUTES
 # Codex reports the same reset instant up to a few seconds apart across observations.
 RESET_TOLERANCE_SECONDS = 300.0
+REPLAY_ASSUMPTIONS = "no menu opens, no Low Power Mode or thermal pressure, perfect activity detection"
 
 
 def parse_timestamp(text: str) -> float | None:
@@ -174,7 +177,7 @@ def export(args: argparse.Namespace) -> int:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
     quota_records = sum(record["kind"] == "quota" for record in records)
     print(f"wrote {output}: {len(records) - quota_records} activity minutes, {quota_records} quota records")
-    print("keep this file local; share only the replay table")
+    print("keep this file local, share only the replay table, and delete the file when done")
     return 0
 
 
@@ -190,6 +193,8 @@ def simulate(policy: str, end: float, activity: list[int]) -> list[float]:
 
     def delay(now: float) -> float:
         # AdaptiveRefreshPolicyCore without menu opens: longIdle, capped while coding activity is recent.
+        # Rollouts do not record Low Power Mode or thermal pressure, under which the app would use its 30-minute
+        # constrained delay.
         if aware and last_activity is not None and now - last_activity < CODING_ACTIVITY_MINUTES:
             return CODING_ACTIVITY_DELAY_MINUTES
         return LONG_IDLE_DELAY_MINUTES
@@ -253,6 +258,7 @@ def summarize(records: list[dict]) -> dict:
         "activityMinutes": len(activity),
         "quotaStreams": len({record["stream"] for record in body if record["kind"] == "quota"}),
         "quotaIncreases": len(changes),
+        "assumes": REPLAY_ASSUMPTIONS,
         "policies": rows,
     }
 
@@ -265,6 +271,7 @@ def replay(args: argparse.Namespace) -> int:
         return 0
     print(f"span {summary['spanDays']} days, activity minutes {summary['activityMinutes']}, "
           f"quota streams {summary['quotaStreams']}, quota increases {summary['quotaIncreases']}")
+    print(f"unconstrained counterfactual: assumes {summary['assumes']}")
     print(f"{'policy':<17} {'refresh/day':>11} {'lag p50':>8} {'lag p95':>8} {'lag max':>8} {'<=5min':>7}")
     for row in summary["policies"]:
         if "lagP50Minutes" in row:
