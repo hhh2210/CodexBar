@@ -200,7 +200,7 @@ public struct LocalAgentSessionScanner: Sendable {
             in: allProcesses, validator: self.appServerTrustValidator) ||
             AgentPSOutputParser.hasTrustedManagedCodexDaemon(
                 in: allProcesses,
-                recordedPIDs: CodexHomeScope.recordedAppServerPIDs(codexHome: codexHomeDirectory),
+                recorded: CodexHomeScope.recordedAppServers(codexHome: codexHomeDirectory),
                 validator: self.managedDaemonTrustValidator)
         guard Self.shouldScanSessionMetadata(
             hasAgentProcesses: !processes.isEmpty,

@@ -346,13 +346,13 @@ public enum AgentPSOutputParser {
 
     static func hasTrustedManagedCodexDaemon(
         in records: [AgentProcessRecord],
-        recordedPIDs: [Int32],
+        recorded: [CodexHomeScope.RecordedAppServer],
         validator: (AgentProcessRecord) -> Bool) -> Bool
     {
         records.contains { record in
             let argv = record.arguments ?? record.command.split(whereSeparator: \.isWhitespace).map(String.init)
-            return recordedPIDs.contains(record.pid) && CodexHomeScope.isAppServer(arguments: argv) &&
-                validator(record)
+            return recorded.contains { $0.identifies(pid: record.pid, startedAt: record.startedAt) } &&
+                CodexHomeScope.isAppServer(arguments: argv) && validator(record)
         }
     }
 

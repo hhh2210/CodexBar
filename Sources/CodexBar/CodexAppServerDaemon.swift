@@ -14,7 +14,7 @@ struct CodexAppServerDaemon {
 
     func restartIfRunning(homeURL: URL, environment: [String: String]) async -> String? {
         let home = homeURL.resolvingSymlinksInPath().standardizedFileURL
-        guard CodexHomeScope.recordedAppServerPIDs(codexHome: home).contains(where: self.isAppServerProcess)
+        guard CodexHomeScope.recordedAppServers(codexHome: home).contains(where: { self.isAppServerProcess($0.pid) })
         else { return nil }
         let env = CodexHomeScope.scopedEnvironment(base: environment, codexHome: home.path)
         let log = CodexBarLog.logger("codex-account-promotion")

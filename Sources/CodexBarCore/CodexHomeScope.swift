@@ -1,15 +1,43 @@
 import Foundation
 
 public enum CodexHomeScope {
-    private struct AppServerPIDRecord: Decodable { let pid: Int32 }
+    /// A background app server as Codex records it for one home.
+    public struct RecordedAppServer: Equatable, Sendable {
+        public let pid: Int32
+        /// The native start time Codex writes beside the PID on macOS. Older records and Linux records have none.
+        let startedAt: Date?
 
-    /// PIDs Codex records for its background app server. Daemon-owned and legacy installs use separate files.
-    public static func recordedAppServerPIDs(codexHome: URL) -> [Int32] {
+        /// A PID record outlives its process, so only the start time tells the recorded process from a reused PID.
+        func identifies(pid: Int32, startedAt: Date?) -> Bool {
+            guard pid == self.pid, let recorded = self.startedAt, let startedAt else { return false }
+            return abs(startedAt.timeIntervalSince(recorded)) < 0.001
+        }
+    }
+
+    private struct AppServerPIDRecord: Decodable {
+        struct Identity: Decodable {
+            let startSeconds: UInt64?
+            let startMicroseconds: UInt64?
+        }
+
+        let pid: Int32
+        let processIdentity: Identity?
+    }
+
+    /// Daemon-owned and legacy installs use separate PID record files.
+    public static func recordedAppServers(codexHome: URL) -> [RecordedAppServer] {
         let directory = codexHome.resolvingSymlinksInPath().standardizedFileURL
             .appendingPathComponent("app-server-daemon", isDirectory: true)
         return ["daemon.pid", "app-server.pid"].compactMap { name in
-            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
-            return try? JSONDecoder().decode(AppServerPIDRecord.self, from: data).pid
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+                  let record = try? JSONDecoder().decode(AppServerPIDRecord.self, from: data)
+            else { return nil }
+            let startedAt = record.processIdentity.flatMap { identity -> Date? in
+                guard let seconds = identity.startSeconds, let microseconds = identity.startMicroseconds
+                else { return nil }
+                return Date(timeIntervalSince1970: TimeInterval(seconds) + TimeInterval(microseconds) / 1_000_000)
+            }
+            return RecordedAppServer(pid: record.pid, startedAt: startedAt)
         }
     }
 

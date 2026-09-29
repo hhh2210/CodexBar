@@ -253,7 +253,7 @@ struct CodexSessionRolloutTests {
     }
 
     @Test
-    func `recorded daemon pid reused by another openai process cannot authorize adaptive rollout inspection`()
+    func `recorded daemon pid naming an openai process that is not an app server cannot authorize rollout inspection`()
         async throws
     {
         let now = Date()
@@ -285,6 +285,50 @@ struct CodexSessionRolloutTests {
             appServerArguments: Self.managedDaemonArguments,
             daemonPIDRecord: recordedPID == nil ? nil : "daemon.pid",
             recordedDaemonPID: recordedPID ?? 0)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test(arguments: [-3600.0, -1.0])
+    func `recorded daemon pid reused by a later signed codex app server cannot authorize rollout inspection`(
+        recordedStartOffset: TimeInterval) async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: "daemon.pid",
+            recordedDaemonIdentity: .native(startOffset: recordedStartOffset))
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let sessions = await fixture.scanner.scan(
+            now: now,
+            environment: fixture.environment,
+            includeFileOnlySessions: false)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test(arguments: [RecordedDaemonIdentity.timestampOnly, .linux])
+    func `daemon pid record without a native macos start time cannot authorize rollout inspection`(
+        identity: RecordedDaemonIdentity) async throws
+    {
+        let now = Date()
+        let fixture = try Self.makeAdaptiveChatGPTFixture(
+            now: now,
+            rolloutAge: 30,
+            appServerExecutable: Self.managedDaemonExecutable,
+            appServerArguments: Self.managedDaemonArguments,
+            daemonPIDRecord: "daemon.pid",
+            recordedDaemonIdentity: identity)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         let sessions = await fixture.scanner.scan(
@@ -555,6 +599,15 @@ struct CodexSessionRolloutTests {
         #expect(untrusted.isEmpty)
     }
 
+    /// How a fixture PID record identifies its process, in the shapes Codex writes.
+    enum RecordedDaemonIdentity: Sendable {
+        /// macOS native identity, recorded this many seconds from the running fixture process's start.
+        case native(startOffset: TimeInterval)
+        case linux
+        /// Records from Codex versions that wrote only the locale-dependent `ps` start string.
+        case timestampOnly
+    }
+
     private struct AdaptiveChatGPTFixture {
         let root: URL
         let rollout: URL
@@ -569,6 +622,7 @@ struct CodexSessionRolloutTests {
         appServerArguments: String = "-c features.code_mode_host=true app-server --analytics-default-enabled",
         daemonPIDRecord: String? = nil,
         recordedDaemonPID: Int32 = 4234,
+        recordedDaemonIdentity: RecordedDaemonIdentity = .native(startOffset: 0),
         appServerIsTrusted: Bool = true,
         appServerTrustValidator: LocalAgentSessionScanner
             .AppServerTrustValidator? = nil) throws -> AdaptiveChatGPTFixture
@@ -591,20 +645,27 @@ struct CodexSessionRolloutTests {
         try fileManager.setAttributes(
             [.modificationDate: now.addingTimeInterval(-rolloutAge)],
             ofItemAtPath: rollout.path)
-        if let daemonPIDRecord {
-            let directory = codexHome.appendingPathComponent("app-server-daemon", isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try Data(#"{"pid":\#(recordedDaemonPID),"processStartTime":"synthetic"}"#.utf8)
-                .write(to: directory.appendingPathComponent(daemonPIDRecord))
-        }
-
         let executable = appServerExecutable
             .replacingOccurrences(of: "<codex-home>", with: codexHome.path)
             .replacingOccurrences(of: "<home>", with: root.path)
+        let processLine = "4234 1 Mon Jul 6 09:03:00 2026 \(executable) \(appServerArguments)"
+        if let daemonPIDRecord {
+            let startedAt = try #require(AgentPSOutputParser.parse(processLine).first?.startedAt)
+            let identity = switch recordedDaemonIdentity {
+            case let .native(startOffset):
+                #","processIdentity":{"bootId":"synthetic","uniqueId":1,"startSeconds":"# +
+                    #"\#(Int(startedAt.timeIntervalSince1970 + startOffset)),"startMicroseconds":0}"#
+            case .linux: #","processIdentity":{"bootId":"synthetic","startTicks":42}"#
+            case .timestampOnly: ""
+            }
+            let directory = codexHome.appendingPathComponent("app-server-daemon", isDirectory: true)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(#"{"pid":\#(recordedDaemonPID),"processStartTime":"synthetic"\#(identity)}"#.utf8)
+                .write(to: directory.appendingPathComponent(daemonPIDRecord))
+        }
+
         let scanner = LocalAgentSessionScanner(
-            processOutputProvider: { _ in
-                "4234 1 Mon Jul 6 09:03:00 2026 \(executable) \(appServerArguments)"
-            },
+            processOutputProvider: { _ in processLine },
             cwdProvider: { _, _ in [:] },
             appServerTrustValidator: appServerTrustValidator ?? { _ in appServerIsTrusted },
             managedDaemonTrustValidator: { _ in appServerIsTrusted })
