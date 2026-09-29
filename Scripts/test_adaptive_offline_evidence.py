@@ -103,6 +103,43 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         self.assertNotIn("stale", json.dumps(records))
 
+    def test_export_replaces_a_link_at_the_output_path_without_writing_through_it(self):
+        start = self.now - 3600
+        self.write_rollout("rollout-a.jsonl", [token_count(start, 10.0, start + 86400)])
+        output = self.root / "evidence.jsonl"
+        for link in ["symlink", "hard link"]:
+            with self.subTest(link=link):
+                victim = self.root / f"unrelated-{link}.txt"
+                victim.write_text("keep me\n", encoding="utf-8")
+                victim.chmod(0o644)
+                output.unlink(missing_ok=True)
+                if link == "symlink":
+                    output.symlink_to(victim)
+                else:
+                    os.link(victim, output)
+
+                records = self.export()
+
+                self.assertEqual(victim.read_text(encoding="utf-8"), "keep me\n")
+                self.assertEqual(victim.stat().st_mode & 0o777, 0o644)
+                self.assertFalse(output.is_symlink())
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(records[0]["kind"], "header")
+        self.assertEqual(sorted(path.name for path in self.root.iterdir() if path.name.startswith(".")), [])
+
+    def test_failed_export_keeps_the_previous_file_and_leaves_no_partial_file(self):
+        start = self.now - 3600
+        self.write_rollout("rollout-a.jsonl", [token_count(start, 10.0, start + 86400)])
+        output = self.root / "evidence.jsonl"
+        output.write_text("previous\n", encoding="utf-8")
+
+        with mock.patch.object(self.module.os, "replace", side_effect=OSError("disk full")), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            self.module.main(["export", "--codex-home", str(self.root / "codex"), "--output", str(output)])
+
+        self.assertEqual(output.read_text(encoding="utf-8"), "previous\n")
+        self.assertEqual(sorted(path.name for path in self.root.iterdir() if path.name.startswith(".")), [])
+
     def test_default_export_stays_out_of_the_working_directory_and_replay_finds_it(self):
         start = self.now - 3600
         self.write_rollout("rollout-a.jsonl", [token_count(start, 10.0, start + 86400)])

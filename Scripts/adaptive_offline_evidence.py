@@ -17,6 +17,7 @@ every 30 minutes and may pause activity scanning; and perfect activity detection
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -24,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 
 SCHEMA = "codexbar-adaptive-offline-evidence/1"
@@ -169,12 +171,18 @@ def export(args: argparse.Namespace) -> int:
     }
     output = Path(args.output) if args.output else default_evidence_path()
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # The file holds a personal activity rhythm, so only the owner may read it, even when it already existed.
-    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(descriptor, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        for record in [header, *records]:
-            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    # The file holds a personal activity rhythm, so it is written owner-only (mkstemp) and then renamed into place.
+    # The rename replaces whatever the output name held, so a symlink or hard link there is never written through.
+    descriptor, staging = tempfile.mkstemp(prefix=".", suffix=f"-{output.name}", dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            for record in [header, *records]:
+                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+        os.replace(staging, output)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(staging)
+        raise
     quota_records = sum(record["kind"] == "quota" for record in records)
     print(f"wrote {output}: {len(records) - quota_records} activity minutes, {quota_records} quota records")
     print("keep this file local, share only the replay table, and delete the file when done")
