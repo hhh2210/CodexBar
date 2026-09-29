@@ -5,7 +5,7 @@
 writes a small JSONL file. Each record holds only a minute offset from the first record, an activity kind, or a Codex
 quota observation (opaque stream index, window minutes, rising used percent). It never writes paths, working
 directories, session or account identifiers, model or plan names, prompts, absolute dates, or the time zone. Nothing
-is uploaded; review the file before sharing it.
+is uploaded. The file still holds a daily activity rhythm, so keep it on this Mac and share only the `replay` table.
 
 `replay` compares refresh policies on an exported file: refreshes per day, and how long each quota increase seen in a
 rollout waits for the next simulated refresh. Adaptive rows assume no menu opens, so they are upper bounds on delay.
@@ -167,6 +167,7 @@ def export(args: argparse.Namespace) -> int:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
     quota_records = sum(record["kind"] == "quota" for record in records)
     print(f"wrote {args.output}: {len(records) - quota_records} activity minutes, {quota_records} quota records")
+    print("keep this file local; share only the replay table")
     return 0
 
 
@@ -270,7 +271,7 @@ def replay(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    export_parser = commands.add_parser("export", help="write a reviewable offline evidence file")
+    export_parser = commands.add_parser("export", help="write a local offline evidence file")
     export_parser.add_argument("--days", type=int, default=7)
     export_parser.add_argument("--include-claude", action="store_true", help="add Claude Code activity minutes")
     export_parser.add_argument("--codex-home", help="defaults to $CODEX_HOME or ~/.codex")
