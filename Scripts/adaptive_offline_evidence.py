@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Offline evidence for adaptive refresh from local agent transcripts.
+
+`export` reads Codex rollouts (and, with --include-claude, Claude Code transcripts) that already exist on this Mac and
+writes a small JSONL file. Each record holds only a minute offset from the first record, an activity kind, or a Codex
+quota observation (opaque stream index, window minutes, rising used percent). It never writes paths, working
+directories, session or account identifiers, model or plan names, prompts, absolute dates, or the time zone. Nothing
+is uploaded; review the file before sharing it.
+
+`replay` compares refresh policies on an exported file: refreshes per day, and how long each quota increase seen in a
+rollout waits for the next simulated refresh. Adaptive rows assume no menu opens, so they are upper bounds on delay.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+import re
+import statistics
+import sys
+import time
+
+SCHEMA = "codexbar-adaptive-offline-evidence/1"
+TIMESTAMP = re.compile(r'"timestamp":\s*"([0-9T:.\-]+Z?)"')
+POLICIES = ("fixed2", "fixed5", "fixed15", "fixed30", "adaptiveNoMenu", "agentAwareNoMenu")
+SCAN_INTERVAL_MINUTES = 0.5
+CODING_ACTIVITY_MINUTES = 5.0
+CODING_ACTIVITY_DELAY_MINUTES = 5.0
+LONG_IDLE_DELAY_MINUTES = 30.0
+
+
+def parse_timestamp(text: str) -> float | None:
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def recent_files(root: Path, pattern: str, since: float) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.rglob(pattern) if path.is_file() and path.stat().st_mtime >= since)
+
+
+def read_codex(sessions: Path, since: float) -> tuple[set[int], list[tuple[float, str, int, float, float | None]]]:
+    activity: set[int] = set()
+    quota: list[tuple[float, str, int, float, float | None]] = []
+    limit_keys: dict[str, str] = {}
+    for path in recent_files(sessions, "rollout-*.jsonl", since):
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                is_token_count = '"token_count"' in line
+                if not is_token_count and '"task_started"' not in line:
+                    continue
+                match = TIMESTAMP.search(line, 0, 80)
+                stamp = parse_timestamp(match.group(1)) if match else None
+                if stamp is None or stamp < since:
+                    continue
+                activity.add(int(stamp // 60))
+                if not is_token_count:
+                    continue
+                try:
+                    limits = json.loads(line)["payload"].get("rate_limits") or {}
+                except (ValueError, KeyError, AttributeError):
+                    continue
+                key = limit_keys.setdefault(str(limits.get("limit_id")), f"l{len(limit_keys)}")
+                for window in ("primary", "secondary"):
+                    entry = limits.get(window) or {}
+                    used, minutes = entry.get("used_percent"), entry.get("window_minutes")
+                    if used is None or minutes is None:
+                        continue
+                    reset = entry.get("resets_at")
+                    minutes_to_reset = (reset - stamp) / 60 if isinstance(reset, (int, float)) else None
+                    quota.append((stamp, key, int(minutes), float(used), minutes_to_reset))
+    return activity, quota
+
+
+def read_claude(projects: Path, since: float) -> set[int]:
+    activity: set[int] = set()
+    for path in recent_files(projects, "*.jsonl", since):
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if '"assistant"' not in line:
+                    continue
+                match = TIMESTAMP.search(line)
+                stamp = parse_timestamp(match.group(1)) if match else None
+                if stamp is not None and stamp >= since:
+                    activity.add(int(stamp // 60))
+    return activity
+
+
+def build_records(
+    activity: dict[str, set[int]],
+    quota: list[tuple[float, str, int, float, float | None]],
+) -> list[dict]:
+    minutes = [minute for bucket in activity.values() for minute in bucket] + [int(q[0] // 60) for q in quota]
+    if not minutes:
+        return []
+    origin = min(minutes)
+    records: list[dict] = []
+    for kind, bucket in activity.items():
+        records += [{"t": minute - origin, "kind": f"{kind}Activity"} for minute in sorted(bucket)]
+    # Accounts can share a limit id but not a reset time, and a reset starts a new window, so each
+    # (limit, window, reset hour) is its own stream. Only rising usage counts: concurrent sessions report
+    # slightly stale snapshots that would otherwise flicker by one percent.
+    streams: dict[tuple, str] = {}
+    peaks: dict[str, float] = {}
+    for stamp, key, window, used, minutes_to_reset in sorted(quota):
+        anchor = round((stamp / 60 + minutes_to_reset) / 60) if minutes_to_reset is not None else None
+        stream = streams.setdefault((key, window, anchor), f"s{len(streams)}")
+        if stream in peaks and used <= peaks[stream]:
+            continue
+        first = stream not in peaks
+        peaks[stream] = used
+        records.append({
+            "t": int(stamp // 60) - origin,
+            "kind": "quota",
+            "stream": stream,
+            "windowMinutes": window,
+            "usedPercent": used,
+            "first": first,
+        })
+    return sorted(records, key=lambda record: record["t"])
+
+
+def export(args: argparse.Namespace) -> int:
+    since = time.time() - args.days * 86400
+    codex_home = Path(args.codex_home or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    codex_activity, quota = read_codex(codex_home / "sessions", since)
+    activity = {"codex": codex_activity}
+    if args.include_claude:
+        activity["claude"] = read_claude(Path.home() / ".claude" / "projects", since)
+    records = build_records(activity, quota)
+    if not records:
+        print("no local agent activity found in the requested window", file=sys.stderr)
+        return 1
+    header = {
+        "kind": "header",
+        "schema": SCHEMA,
+        "days": args.days,
+        "bucketMinutes": 1,
+        "sources": [kind for kind, bucket in activity.items() if bucket],
+    }
+    with Path(args.output).open("w", encoding="utf-8") as handle:
+        for record in [header, *records]:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    quota_records = sum(record["kind"] == "quota" for record in records)
+    print(f"wrote {args.output}: {len(records) - quota_records} activity minutes, {quota_records} quota records")
+    return 0
+
+
+def simulate(policy: str, end: float, activity: list[int]) -> list[float]:
+    if policy.startswith("fixed"):
+        step = float(policy.removeprefix("fixed"))
+        return [index * step for index in range(int(end // step) + 1)]
+    aware = policy == "agentAwareNoMenu"
+    last_activity: float | None = None
+    pending = iter(activity)
+    next_activity = next(pending, None)
+
+    def delay(now: float) -> float:
+        # AdaptiveRefreshPolicyCore without menu opens: longIdle, capped while coding activity is recent.
+        if aware and last_activity is not None and now - last_activity < CODING_ACTIVITY_MINUTES:
+            return CODING_ACTIVITY_DELAY_MINUTES
+        return LONG_IDLE_DELAY_MINUTES
+
+    refreshes = [0.0]
+    scheduled = delay(0.0)
+    clock = 0.0
+    while clock <= end:
+        clock += SCAN_INTERVAL_MINUTES
+        observed = False
+        while next_activity is not None and next_activity <= clock:
+            last_activity, observed = float(next_activity), True
+            next_activity = next(pending, None)
+        if aware and observed:
+            # noteCodingActivityObserved only ever pulls the next tick earlier.
+            scheduled = min(scheduled, clock + delay(clock))
+        if clock >= scheduled:
+            refreshes.append(clock)
+            scheduled = clock + delay(clock)
+    return refreshes
+
+
+def detection_lags(refreshes: list[float], changes: list[float]) -> list[float]:
+    lags: list[float] = []
+    index = 0
+    for change in sorted(changes):
+        while index < len(refreshes) and refreshes[index] < change:
+            index += 1
+        if index < len(refreshes):
+            lags.append(refreshes[index] - change)
+    return lags
+
+
+def summarize(records: list[dict]) -> dict:
+    body = [record for record in records if record.get("kind") != "header"]
+    end = max((record["t"] for record in body), default=0)
+    activity = sorted({record["t"] for record in body if record["kind"].endswith("Activity")})
+    changes = [record["t"] for record in body if record["kind"] == "quota" and not record.get("first")]
+    days = max(end / 1440, 1 / 24)
+    rows = []
+    for policy in POLICIES:
+        refreshes = simulate(policy, end, activity)
+        lags = sorted(detection_lags(refreshes, changes))
+        row = {"policy": policy, "refreshesPerDay": round(len(refreshes) / days, 1)}
+        if lags:
+            row |= {
+                "lagP50Minutes": statistics.median(lags),
+                "lagP95Minutes": lags[min(len(lags) - 1, int(0.95 * len(lags)))],
+                "lagMaxMinutes": lags[-1],
+                "withinFiveMinutes": round(sum(lag <= 5 for lag in lags) / len(lags), 3),
+            }
+        rows.append(row)
+    return {
+        "spanDays": round(days, 2),
+        "activityMinutes": len(activity),
+        "quotaStreams": len({record["stream"] for record in body if record["kind"] == "quota"}),
+        "quotaIncreases": len(changes),
+        "policies": rows,
+    }
+
+
+def replay(args: argparse.Namespace) -> int:
+    lines = Path(args.trace).read_text(encoding="utf-8").splitlines()
+    summary = summarize([json.loads(line) for line in lines if line.strip()])
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0
+    print(f"span {summary['spanDays']} days, activity minutes {summary['activityMinutes']}, "
+          f"quota streams {summary['quotaStreams']}, quota increases {summary['quotaIncreases']}")
+    print(f"{'policy':<17} {'refresh/day':>11} {'lag p50':>8} {'lag p95':>8} {'lag max':>8} {'<=5min':>7}")
+    for row in summary["policies"]:
+        if "lagP50Minutes" in row:
+            print(f"{row['policy']:<17} {row['refreshesPerDay']:>11.1f} {row['lagP50Minutes']:>8.1f} "
+                  f"{row['lagP95Minutes']:>8.1f} {row['lagMaxMinutes']:>8.1f} {row['withinFiveMinutes']:>7.0%}")
+        else:
+            print(f"{row['policy']:<17} {row['refreshesPerDay']:>11.1f} {'-':>8} {'-':>8} {'-':>8} {'-':>7}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    export_parser = commands.add_parser("export", help="write a reviewable offline evidence file")
+    export_parser.add_argument("--days", type=int, default=7)
+    export_parser.add_argument("--include-claude", action="store_true", help="add Claude Code activity minutes")
+    export_parser.add_argument("--codex-home", help="defaults to $CODEX_HOME or ~/.codex")
+    export_parser.add_argument("--output", default="codexbar-adaptive-evidence.jsonl")
+    replay_parser = commands.add_parser("replay", help="compare refresh policies on an evidence file")
+    replay_parser.add_argument("trace")
+    replay_parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    return export(args) if args.command == "export" else replay(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

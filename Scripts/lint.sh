@@ -85,6 +85,10 @@ check_mimo_usage_script() {
   python3 "${ROOT_DIR}/Scripts/test_mimo_usage.py"
 }
 
+check_adaptive_offline_evidence_script() {
+  python3 "${ROOT_DIR}/Scripts/test_adaptive_offline_evidence.py"
+}
+
 check_swift_test_sharding() {
   "${ROOT_DIR}/Scripts/test_swift_test_sharding.sh"
 }
@@ -147,6 +151,7 @@ run_portable_checks() {
   check_sparkle_signing_paths
   check_swift_static_sdk_installer
   check_mimo_usage_script
+  check_adaptive_offline_evidence_script
   check_swift_test_sharding
   check_ci_path_gate
   check_homebrew_tap_wait
