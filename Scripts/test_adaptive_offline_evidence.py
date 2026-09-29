@@ -4,10 +4,12 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 def load_script():
@@ -100,6 +102,28 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
 
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         self.assertNotIn("stale", json.dumps(records))
+
+    def test_default_export_stays_out_of_the_working_directory_and_replay_finds_it(self):
+        start = self.now - 3600
+        self.write_rollout("rollout-a.jsonl", [token_count(start, 10.0, start + 86400)])
+        home = self.root / "home"
+        checkout = self.root / "checkout"
+        checkout.mkdir()
+        previous = os.getcwd()
+        os.chdir(checkout)
+        try:
+            with mock.patch.dict(os.environ, {"HOME": str(home)}), contextlib.redirect_stdout(io.StringIO()) as out:
+                exported = self.module.main(["export", "--codex-home", str(self.root / "codex")])
+                replayed = self.module.main(["replay"])
+        finally:
+            os.chdir(previous)
+
+        output = home / ".codexbar" / "adaptive-evidence.jsonl"
+        self.assertEqual((exported, replayed), (0, 0))
+        self.assertEqual(list(checkout.iterdir()), [])
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
+        self.assertIn("agentAwareNoMenu", out.getvalue())
 
     def test_accounts_sharing_a_limit_id_stay_separate_and_flicker_is_ignored(self):
         start = self.now - 7200

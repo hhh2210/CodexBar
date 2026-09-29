@@ -36,6 +36,8 @@ debug_*.swift
 .swiftpm-cache/
 .tmp-clang/
 __pycache__/
+# Offline adaptive evidence holds a personal activity rhythm (Scripts/adaptive_offline_evidence.py).
+*adaptive-evidence.jsonl
 
 # Debug/analysis docs
 docs/*-analysis.md
