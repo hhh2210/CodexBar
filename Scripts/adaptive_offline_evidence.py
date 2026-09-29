@@ -159,7 +159,10 @@ def export(args: argparse.Namespace) -> int:
         "bucketMinutes": 1,
         "sources": [kind for kind, bucket in activity.items() if bucket],
     }
-    with Path(args.output).open("w", encoding="utf-8") as handle:
+    # The file holds a personal activity rhythm, so only the owner may read it, even when it already existed.
+    descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         for record in [header, *records]:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
     quota_records = sum(record["kind"] == "quota" for record in records)
@@ -168,9 +171,10 @@ def export(args: argparse.Namespace) -> int:
 
 
 def simulate(policy: str, end: float, activity: list[int]) -> list[float]:
+    # Timer ticks only: like the app timer, each policy waits one delay before its first automatic refresh.
     if policy.startswith("fixed"):
         step = float(policy.removeprefix("fixed"))
-        return [index * step for index in range(int(end // step) + 1)]
+        return [index * step for index in range(1, int(end // step) + 1)]
     aware = policy == "agentAwareNoMenu"
     last_activity: float | None = None
     pending = iter(activity)
@@ -182,7 +186,7 @@ def simulate(policy: str, end: float, activity: list[int]) -> list[float]:
             return CODING_ACTIVITY_DELAY_MINUTES
         return LONG_IDLE_DELAY_MINUTES
 
-    refreshes = [0.0]
+    refreshes: list[float] = []
     scheduled = delay(0.0)
     clock = 0.0
     while clock <= end:

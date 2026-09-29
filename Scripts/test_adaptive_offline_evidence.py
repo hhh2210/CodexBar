@@ -87,6 +87,19 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
         for private in ["secret-project", "019f-secret-session", "private prompt", "plus", "limit-secret-id", "2026-"]:
             self.assertNotIn(private, text)
         self.assertEqual(records[0]["schema"], self.module.SCHEMA)
+        self.assertEqual((self.root / "evidence.jsonl").stat().st_mode & 0o777, 0o600)
+
+    def test_export_tightens_an_existing_evidence_file_to_owner_only(self):
+        start = self.now - 3600
+        self.write_rollout("rollout-a.jsonl", [token_count(start, 10.0, start + 86400)])
+        output = self.root / "evidence.jsonl"
+        output.write_text("stale\n", encoding="utf-8")
+        output.chmod(0o644)
+
+        records = self.export()
+
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("stale", json.dumps(records))
 
     def test_accounts_sharing_a_limit_id_stay_separate_and_flicker_is_ignored(self):
         start = self.now - 7200
@@ -135,7 +148,20 @@ class AdaptiveOfflineEvidenceTests(unittest.TestCase):
 
         self.assertEqual(rows["fixed30"]["lagMaxMinutes"], 20.0)
         self.assertTrue(all("lagMaxMinutes" in row for row in rows.values()))
-        self.assertEqual(rows["fixed30"]["refreshesPerDay"], round(4 / (100 / 1440), 1))
+        self.assertEqual(rows["fixed30"]["refreshesPerDay"], round(3 / (100 / 1440), 1))
+
+    def test_startup_is_not_counted_as_a_refresh(self):
+        records = [
+            {"kind": "header"},
+            {"t": 0, "kind": "quota", "stream": "s0", "windowMinutes": 10080, "usedPercent": 10.0, "first": True},
+            {"t": 20, "kind": "quota", "stream": "s0", "windowMinutes": 10080, "usedPercent": 11.0, "first": False},
+        ]
+
+        rows = {row["policy"]: row for row in self.module.summarize(records)["policies"]}
+
+        self.assertEqual(rows["fixed30"]["refreshesPerDay"], 0.0)
+        self.assertEqual(rows["adaptiveNoMenu"]["refreshesPerDay"], 0.0)
+        self.assertEqual(rows["fixed30"]["lagMaxMinutes"], 10.0)
 
     def test_percentiles_use_the_replay_kit_nearest_rank(self):
         self.assertEqual(self.module.percentile([float(value) for value in range(1, 21)], 0.95), 19.0)
